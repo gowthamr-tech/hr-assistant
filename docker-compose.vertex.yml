@@ -1,0 +1,12 @@
+# Optional override for LOCAL testing with Vertex AI and your gcloud login (no API key).
+# The main docker-compose.yml (used by the graders) is unchanged.
+#
+# Usage:
+#   gcloud auth application-default login      # once, on your machine
+#   docker compose -f docker-compose.yml -f docker-compose.vertex.yml up --build
+services:
+  assistant:
+    volumes:
+      - ${HOME}/.config/gcloud:/gcloud:ro
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /gcloud/application_default_credentials.json

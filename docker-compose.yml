@@ -1,0 +1,21 @@
+services:
+  assistant:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CORPUS_DIR: ${CORPUS_DIR:-./data/corpus}
+      MANIFEST_PATH: ${MANIFEST_PATH:-./data/manifest.json}
+      DB_PATH: ${DB_PATH:-./data/veltrix.db}
+      APP_TODAY: ${APP_TODAY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-}
+    restart: unless-stopped

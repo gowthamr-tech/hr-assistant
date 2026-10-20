@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PeopleOps Assistant</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --text:#1d2433; --muted:#667085; --line:#e3e6eb; --accent:#2f5bd3;
+          --user:#e8efff; --chip:#eef1f5; --ok:#1f7a4d; --err:#b42318; --pend:#9a6700; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#111418; --panel:#1a1f26; --text:#e6e9ee; --muted:#98a2b3; --line:#2a313b; --accent:#7aa2ff;
+    --user:#22304d; --chip:#252c36; --ok:#4cc38a; --err:#f97066; --pend:#f5c451; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  label { font-size:13px; color:var(--muted); display:flex; gap:6px; align-items:center; }
+  input, button { font:inherit; color:inherit; }
+  input { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
+  #emp { width:110px; }
+  button { border:1px solid var(--line); background:var(--panel); border-radius:8px; padding:6px 12px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  #health { font-size:12px; padding:2px 8px; border-radius:999px; background:var(--chip); }
+  main { max-width:900px; margin:0 auto; padding:16px; display:flex; flex-direction:column; gap:12px; min-height:calc(100vh - 140px); }
+  .msg { padding:10px 14px; border-radius:12px; background:var(--panel); border:1px solid var(--line); max-width:85%; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .msg.user { align-self:flex-end; background:var(--user); }
+  .meta { margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; font-size:12px; }
+  .chip { background:var(--chip); border-radius:6px; padding:2px 8px; }
+  .route { font-weight:600; }
+  .success { color:var(--ok); } .error { color:var(--err); } .pending_confirmation { color:var(--pend); }
+  .sys { align-self:center; color:var(--muted); font-size:13px; }
+  form { position:sticky; bottom:0; background:var(--bg); padding:12px 16px; border-top:1px solid var(--line); display:flex; gap:8px; max-width:900px; margin:0 auto; }
+  #text { flex:1; min-width:0; }
+  .examples { display:flex; flex-wrap:wrap; gap:6px; }
+  .examples button { font-size:12px; padding:3px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PeopleOps Assistant</h1>
+  <label>Employee ID <input id="emp" value="E2004" autocomplete="off"></label>
+  <label>Session <input id="sess" readonly size="14"></label>
+  <button id="newSess" type="button">New session</button>
+  <span id="health">checking…</span>
+</header>
+<main id="log">
+  <div class="sys">Try: E2004 (employee, IN) · E4004 (employee, DE) · E2002 (manager) · E1001 (HR)</div>
+  <div class="examples sys" id="examples"></div>
+</main>
+<form id="form">
+  <input id="text" placeholder="Ask about HR policies or your leave…" autocomplete="off">
+  <button class="primary" type="submit">Send</button>
+</form>
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+const examples = ["How many sick days do I get?", "What's my leave balance?", "Apply annual leave from 16 to 18 November",
+  "yes", "Who in my team is on leave in November?", "What is the deadline for expense claims?", "When is Diwali this year?"];
+for (const e of examples) {
+  const b = document.createElement("button"); b.type = "button"; b.textContent = e;
+  b.onclick = () => { $("text").value = e; $("form").requestSubmit(); };
+  $("examples").appendChild(b);
+}
+function newSession() { $("sess").value = "ui-" + crypto.randomUUID().slice(0, 8); }
+newSession();
+$("newSess").onclick = () => { newSession(); add("sys", "New session started."); };
+$("emp").onchange = () => { newSession(); add("sys", "Employee changed: new session started."); };
+
+function add(kind, text) {
+  const d = document.createElement("div"); d.className = kind === "sys" ? "sys" : "msg " + kind;
+  d.textContent = text; log.appendChild(d); d.scrollIntoView({ block: "end" }); return d;
+}
+function chip(parent, text, cls) {
+  const c = document.createElement("span"); c.className = "chip " + (cls || ""); c.textContent = text; parent.appendChild(c);
+}
+
+$("form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const text = $("text").value.trim(); if (!text) return;
+  $("text").value = "";
+  add("user", text);
+  const pending = add("bot", "…");
+  const started = performance.now();
+  try {
+    const r = await fetch("/chat", { method: "POST",
+      headers: { "Content-Type": "application/json", "X-Employee-Id": $("emp").value.trim() },
+      body: JSON.stringify({ session_id: $("sess").value, message: text }) });
+    const body = await r.json();
+    if (!r.ok) { pending.textContent = `HTTP ${r.status}: ${body.detail || JSON.stringify(body)}`; pending.classList.add("error"); return; }
+    pending.textContent = body.answer;
+    const meta = document.createElement("div"); meta.className = "meta";
+    chip(meta, "route: " + body.route, "route");
+    chip(meta, ((performance.now() - started) / 1000).toFixed(1) + " s");
+    for (const c of body.citations) chip(meta, `📄 ${c.doc_id} · ${c.locator}`);
+    for (const t of body.tool_calls) chip(meta, `🔧 ${t.name}(${JSON.stringify(t.args)}) → ${t.status}`, t.status);
+    if (body.pending_confirmation) chip(meta, "awaiting confirmation: reply \"yes\"", "pending_confirmation");
+    pending.appendChild(meta);
+  } catch (e) { pending.textContent = "Request failed: " + e; pending.classList.add("error"); }
+};
+
+async function health() {
+  try { const r = await fetch("/health"); $("health").textContent = r.ok ? "ready" : "starting…"; if (!r.ok) setTimeout(health, 2000); }
+  catch { $("health").textContent = "offline"; setTimeout(health, 3000); }
+}
+health();
+</script>
+</body>
+</html>
