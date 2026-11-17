@@ -1,6 +1,6 @@
 # Architecture
 
-This page explains the components of the Veltrix PeopleOps Assistant and how they fit together. For the
+This page explains the components of the HR Assistant and how they fit together. For the
 step-by-step path of individual requests, see [END_TO_END_FLOW.md](END_TO_END_FLOW.md).
 
 ## 1. The big picture

@@ -23,6 +23,7 @@ def make_settings(root: Path, db_path: Path, **overrides) -> Settings:
         app_today=TODAY, llm_provider="fake", llm_model="fake-model", llm_router_model="fake-router",
         llm_timeout_s=10, llm_max_retries=0, anthropic_effort="low", anthropic_refusal_fallback=False,
         embeddings_enabled=False, embedding_model="", log_level="INFO", log_file="", request_deadline_s=25,
+        rate_limit_per_minute=0,
     )
     return replace(base, **overrides)
 

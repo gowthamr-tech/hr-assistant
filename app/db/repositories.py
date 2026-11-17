@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 
@@ -192,15 +192,53 @@ def set_pending(conn: sqlite3.Connection, session_id: str, employee_id: str, too
     )
 
 
-def take_pending(conn: sqlite3.Connection, session_id: str, employee_id: str) -> Optional[dict]:
-    """Atomically remove and return the session's pending proposal (one use only)."""
+def take_pending(conn: sqlite3.Connection, session_id: str, employee_id: str,
+                 max_age_minutes: Optional[int] = None) -> Optional[dict]:
+    """Atomically remove and return the session's pending proposal (one use only).
+
+    A proposal older than ``max_age_minutes`` is removed but not returned: a "yes"
+    long after the proposal was shown must not apply it."""
     row = conn.execute(
-        "DELETE FROM assistant_pending_actions WHERE session_id = ? RETURNING employee_id, tool_name, args_json",
+        "DELETE FROM assistant_pending_actions WHERE session_id = ? "
+        "RETURNING employee_id, tool_name, args_json, created_at",
         (session_id,),
     ).fetchone()
     if row is None or row["employee_id"] != employee_id:
         return None
+    if max_age_minutes is not None:
+        try:
+            created = datetime.fromisoformat(row["created_at"])
+        except (TypeError, ValueError):
+            return None
+        if datetime.now(timezone.utc) - created > timedelta(minutes=max_age_minutes):
+            return None
     return {"tool_name": row["tool_name"], "args": json.loads(row["args_json"])}
+
+
+# ---------------------------------------------------------------- retention
+def purge_expired(conn: sqlite3.Connection, retention_days: int, pending_ttl_minutes: int) -> dict[str, int]:
+    """Delete chat history and sessions idle for longer than ``retention_days`` (0 keeps them),
+    and proposals older than ``pending_ttl_minutes``. Leave data itself is never touched."""
+    now = datetime.now(timezone.utc)
+    pending_cutoff = (now - timedelta(minutes=pending_ttl_minutes)).replace(microsecond=0).isoformat()
+    counts = {"turns": 0, "sessions": 0, "pending": 0}
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        counts["pending"] = conn.execute(
+            "DELETE FROM assistant_pending_actions WHERE created_at < ?", (pending_cutoff,)).rowcount
+        if retention_days > 0:
+            cutoff = (now - timedelta(days=retention_days)).replace(microsecond=0).isoformat()
+            counts["turns"] = conn.execute(
+                "DELETE FROM assistant_turns WHERE created_at < ?", (cutoff,)).rowcount
+            # A session is kept while it has any recent turn, so its owner binding survives.
+            counts["sessions"] = conn.execute(
+                "DELETE FROM assistant_sessions WHERE created_at < ? AND session_id NOT IN "
+                "(SELECT DISTINCT session_id FROM assistant_turns)", (cutoff,)).rowcount
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+    return counts
 
 
 # ---------------------------------------------------------------- holidays

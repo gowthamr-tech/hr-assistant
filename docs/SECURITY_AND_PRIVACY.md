@@ -6,7 +6,12 @@ claims"), but no control on this page depends on the LLM obeying.
 ## 1. Controls and their enforcement points
 
 ### 1.1 Employee identity
-`routes.chat` → `repositories.get_employee(conn, X-Employee-Id)`. That database row is the only source of
+`app/security/auth.py::authenticate` decides which employee ID the request may act as (`AUTH_MODE`):
+`header` trusts `X-Employee-Id` (development only; `APP_ENV=production` refuses to start with it),
+`gateway` requires a constant-time-compared shared secret from the authenticating proxy, and `jwt` verifies
+a bearer token's signature, `exp`, and optionally `iss` and `aud` (algorithm `none` and mixed HS/RS lists are
+rejected at start-up). All failures return the same `401` so callers cannot tell which check failed.
+Then `routes.chat` → `repositories.get_employee(conn, employee_id)`. That database row is the only source of
 `role`, `region` and `manager_id`. Nothing from the message changes it. The interpreter sees the role and
 region from the database, and its plan cannot widen what code allows.
 
@@ -77,6 +82,20 @@ These are treated as untrusted input:
 - API keys are read from the environment (`config.load_settings`, provider env vars).
 - `.env` is in `.gitignore` and `.dockerignore`; `.env.example` contains no values.
 - Keys are never logged; logs record only the provider and model names.
+- Auth secrets (`AUTH_JWT_SECRET`, `AUTH_GATEWAY_TOKEN`) must be at least 32 characters; start-up fails
+  otherwise. In production, inject them from your secret manager rather than a `.env` file.
+
+### 1.9a Abuse, retention and transport
+- **Rate limit:** `RATE_LIMIT_PER_MINUTE` per employee (default 30), `429` with `Retry-After`. In-process,
+  so with several replicas it is per replica.
+- **Proposal expiry:** an unconfirmed leave proposal older than `PENDING_TTL_MINUTES` (default 30) is
+  discarded, so a late "yes" never applies a stale request.
+- **Retention:** chat turns and idle sessions older than `RETENTION_DAYS` (default 90) are deleted every
+  6 hours. Leave requests and balances are never touched.
+- **Headers:** every response gets `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`,
+  a restrictive `Content-Security-Policy`, and `Cache-Control: no-store` on `/chat`. HSTS is added when
+  `APP_ENV=production` (TLS is terminated by the proxy in front).
+- **Body size:** bodies over 64 KB are rejected without being read in full.
 
 ### 1.10 Database query safety
 All SQL is in `app/db/repositories.py` with `?` parameters. The only dynamic SQL is the number of

@@ -1,4 +1,4 @@
-"""HTTP API: POST /chat and GET /health (Section 9)."""
+"""HTTP API: POST /chat, health probes (/health, /livez, /readyz) and /metrics."""
 from __future__ import annotations
 
 import asyncio
@@ -6,16 +6,19 @@ import concurrent.futures
 import json
 import logging
 import threading
-import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from app import metrics
+from app.api.middleware import request_id_from
+from app.config import get_settings
 from app.db import repositories as repo
 from app.db.database import connection
 from app.orchestration import responses as R
+from app.security.auth import UNAUTHENTICATED, authenticate
 from app.state import STATE
 
 log = logging.getLogger(__name__)
@@ -40,17 +43,63 @@ def _error(status: int, detail: str) -> JSONResponse:
 _UI_PATH = Path(__file__).resolve().parent.parent / "static" / "index.html"
 
 
+def shutdown_handler_pool() -> None:
+    """Called at shutdown: stop taking new work and let running turns finish."""
+    _HANDLER_POOL.shutdown(wait=True, cancel_futures=True)
+
+
+def _settings():
+    return STATE.settings or get_settings()
+
+
 @router.get("/", include_in_schema=False)
-def ui() -> HTMLResponse:
-    """Minimal test UI (optional per the spec). It only calls the public /chat and /health endpoints."""
+def ui() -> Response:
+    """Minimal test UI. It only calls the public /chat and /health endpoints, and only works in
+    AUTH_MODE=header. Off by default when APP_ENV=production (UI_ENABLED)."""
+    if not _settings().ui_enabled:
+        return _error(404, "not found")
     return HTMLResponse(_UI_PATH.read_text(encoding="utf-8"))
 
 
 @router.get("/health")
+@router.get("/readyz", include_in_schema=False)
 def health() -> JSONResponse:
+    """Readiness: 200 once ingestion has finished, 503 before (or if start-up failed)."""
     if STATE.ready:
         return JSONResponse(status_code=200, content={"status": "ok"})
     return JSONResponse(status_code=503, content={"status": "error" if STATE.failed else "starting"})
+
+
+@router.get("/livez", include_in_schema=False)
+def livez() -> JSONResponse:
+    """Liveness: the process is serving HTTP. A failed start-up is reported as not live, so an
+    orchestrator restarts the container instead of leaving it unready forever."""
+    if STATE.failed:
+        return JSONResponse(status_code=503, content={"status": "error"})
+    return JSONResponse(status_code=200, content={"status": "ok"})
+
+
+@router.get("/metrics", include_in_schema=False)
+def metrics_endpoint() -> Response:
+    if not _settings().metrics_enabled:
+        return _error(404, "not found")
+    metrics.READY.set(1 if STATE.ready else 0)
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)
+
+
+async def _read_body(request: Request) -> Optional[bytes]:
+    """Read at most MAX_BODY_BYTES; None if the body is larger (never buffer a huge upload)."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        return None
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _parse_body(raw: bytes) -> tuple[str, str] | None:
@@ -77,14 +126,28 @@ def _parse_body(raw: bytes) -> tuple[str, str] | None:
 
 @router.post("/chat")
 async def chat(request: Request) -> JSONResponse:
-    request_id = str(uuid.uuid4())
+    request_id = request_id_from(request.scope)
     if not STATE.ready:
         return _error(503, "service is starting")
     settings = STATE.settings
 
-    employee_id = (request.headers.get("x-employee-id") or "").strip()
-    raw = await request.body()
-    parsed = _parse_body(raw)
+    auth = authenticate(request.headers, settings)
+    employee_id = auth.employee_id
+    if employee_id is None and settings.auth_mode != "header":
+        metrics.AUTH_FAILURES.inc()
+        log.warning("authentication failed", extra={"request_id": request_id, "reason": auth.reason})
+        return _error(401, UNAUTHENTICATED)
+    if employee_id is not None and STATE.limiter is not None:
+        retry_after = STATE.limiter.check(employee_id)
+        if retry_after:
+            metrics.RATE_LIMITED.inc()
+            log.warning("rate limited", extra={"request_id": request_id, "employee_id": employee_id})
+            response = _error(429, "too many requests")
+            response.headers["Retry-After"] = str(int(retry_after) + 1)
+            return response
+
+    raw = await _read_body(request)
+    parsed = _parse_body(raw) if raw is not None else None
 
     cancelled = threading.Event()
 
@@ -92,6 +155,9 @@ async def chat(request: Request) -> JSONResponse:
         with connection(settings.db_path) as conn:
             requester = repo.get_employee(conn, employee_id) if employee_id else None
             if requester is None:
+                if settings.auth_mode != "header":
+                    metrics.AUTH_FAILURES.inc()
+                    return _error(401, UNAUTHENTICATED)
                 return _error(401, "missing or unknown X-Employee-Id")
             if parsed is None:
                 return _error(400, "body must be JSON with non-empty string fields session_id and message")
@@ -102,6 +168,7 @@ async def chat(request: Request) -> JSONResponse:
                             extra={"request_id": request_id, "employee_id": requester.employee_id})
                 return _error(403, "session belongs to another employee")
             result = STATE.orchestrator.handle(conn, requester, session_id, message, request_id, cancelled)
+            metrics.CHAT_ROUTES.labels(result.route).inc()
             return JSONResponse(status_code=200, content={
                 "request_id": request_id,
                 "answer": result.answer,
@@ -124,6 +191,7 @@ async def chat(request: Request) -> JSONResponse:
                     conn.execute("DELETE FROM assistant_pending_actions WHERE session_id = ?", (parsed[0],))
             except Exception:
                 log.error("could not clear pending proposal after timeout", extra={"request_id": request_id})
+        metrics.CHAT_TIMEOUTS.inc()
         log.error("request timed out", extra={"request_id": request_id})
         return JSONResponse(status_code=200, content={
             "request_id": request_id, "answer": R.LLM_UNAVAILABLE, "route": "clarify",

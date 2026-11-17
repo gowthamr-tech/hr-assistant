@@ -1,4 +1,4 @@
-# Veltrix PeopleOps Assistant
+# HR Assistant
 
 An HR assistant over HTTP. It answers policy questions from the Veltrix HR corpus with citations, and reads
 and changes leave data through five permission-checked tools. Identity, role and region always come from
@@ -28,19 +28,38 @@ curl -s localhost:8000/chat -H 'Content-Type: application/json' -H 'X-Employee-I
 ### Tests
 
 ```bash
-make install && make test                                    # local (needs tesseract for the OCR tests)
-docker compose run --rm --no-deps --entrypoint "" assistant python -m pytest -q   # in the image
+make install && make check     # ruff + pytest locally (needs tesseract for the OCR tests)
+make docker-test               # the same suite inside the image's `test` stage
 ```
 
-The suite (206 tests) uses a scripted fake LLM and a synthetic corpus and database built by
+The suite (236 tests) uses a scripted fake LLM and a synthetic corpus and database built by
 `tests/fixtures.py`, so it needs no API key and does not depend on the contents of `./data`. One extra
 test ingests the real `./data` corpus when it is present.
+
+### Production
+
+Development defaults trust `X-Employee-Id` as sent, which anyone can forge. For a real deployment set
+`APP_ENV=production`, choose `AUTH_MODE=jwt` (signed bearer tokens from your identity provider) or
+`AUTH_MODE=gateway` (behind an authenticating proxy), and run behind TLS:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build   # or: make docker-prod
+```
+
+The service refuses to start with an unsafe production configuration. What production mode adds:
+authentication, per-employee rate limiting, security headers, `/livez` `/readyz` `/metrics` probes,
+expiry of unconfirmed proposals, chat-history retention, graceful shutdown, a non-root runtime image
+without tests or dev tools, and CI (`.github/workflows/ci.yml`). See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
+for the full checklist, Kubernetes notes, backups and scaling limits.
 
 ### Configuration
 
 All variables are listed in `.env.example`: `CORPUS_DIR`, `MANIFEST_PATH`, `DB_PATH`, `APP_TODAY` (empty means
 use the system date), `LLM_PROVIDER` (`anthropic` | `openai` | `gemini` | `ollama` for a local open-source model), the provider key, and optional
-overrides (`LLM_MODEL`, `LLM_ROUTER_MODEL`, timeouts, `EMBEDDINGS_ENABLED`, `LOG_FILE`). The default model is
+overrides (`LLM_MODEL`, `LLM_ROUTER_MODEL`, timeouts, `EMBEDDINGS_ENABLED`, `LOG_FILE`), and the
+production settings (`APP_ENV`, `AUTH_*`, `RATE_LIMIT_PER_MINUTE`, `CORS_ALLOW_ORIGINS`, `UI_ENABLED`,
+`METRICS_ENABLED`, `RETENTION_DAYS`, `PENDING_TTL_MINUTES`). Invalid values fail at start-up with a message
+naming the variable. The default model is
 `claude-opus-5-5` with `effort: low`. Anthropic's server-side refusal fallback is on by default
 (`ANTHROPIC_REFUSAL_FALLBACK`); if an account rejects it, the client turns it off and retries the same call
 without it.
@@ -104,7 +123,8 @@ flowchart LR
 | 8.2 Propose → confirm, single pending, revalidation | `orchestrator._dispatch`, `_propose_*`, `_execute_pending` | integration |
 | 8.3 / 8.4 Clarify, dates | `orchestrator._propose_apply`, `guards.date_context` | integration, `unit/test_guards_and_pii.py` |
 | 9 API contract, `/health` 503 until ready, 30 s budget | `api/routes.py`, `main.initialise` | integration |
-| 10 Docker, `./data` mount, `.env.example` | `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh` | verified manually (below) |
+| 10 Docker, `./data` mount, `.env.example` | `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh` | CI `docker` job |
+| Production: auth, rate limit, headers, probes, retention, config validation | `security/auth.py`, `security/ratelimit.py`, `api/middleware.py`, `main.py`, `config.validate_settings` | `security/test_production.py` |
 
 ## Sample queries used during development
 
@@ -180,5 +200,6 @@ flowchart LR
 - **OCR quality** depends on Tesseract. Noisy lines (signatures) are filtered by a character-ratio heuristic.
 - **No accrual engine.** Future balances are computed by the composing LLM from the current balance and the
   cited rules, not by deterministic code.
-- **Single process.** Session state is in SQLite; the in-memory index is rebuilt at start-up. That is fine for
-  this corpus, but see DESIGN.md for 10,000 documents.
+- **Single process, single host.** Session state is in SQLite on a local volume and the index is rebuilt in
+  memory at start-up, so run exactly one replica (docs/DEPLOYMENT.md, "Scaling"). Scaling out needs the
+  leave and session tables in a shared database such as PostgreSQL. See DESIGN.md for 10,000 documents.

@@ -127,7 +127,7 @@ class HybridIndex:
             try:
                 qvecs = [_normalise(v) for v in self._embedder.embed(queries)]
                 for i in candidates:
-                    dense[i] = max(sum(a * b for a, b in zip(qv, self._vectors[i])) for qv in qvecs)
+                    dense[i] = max(sum(a * b for a, b in zip(qv, self._vectors[i], strict=True)) for qv in qvecs)
             except Exception:
                 log.warning("query embedding failed; lexical only", exc_info=True)
                 dense.clear()

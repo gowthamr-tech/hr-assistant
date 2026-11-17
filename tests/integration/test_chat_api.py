@@ -379,4 +379,4 @@ def test_modified_corpus_changes_answers(tmp_path, db_path, settings):
 
 def test_ui_page_is_served(chat_factory):
     r = chat_factory({}).client.get("/")
-    assert r.status_code == 200 and "PeopleOps Assistant" in r.text and "/chat" in r.text
+    assert r.status_code == 200 and "HR Assistant" in r.text and "/chat" in r.text

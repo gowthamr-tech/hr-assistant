@@ -115,7 +115,8 @@ class Orchestrator:
         deadline = time.monotonic() + self.settings.request_deadline_s
         today = self.settings.today()
         history = repo.recent_turns(conn, session_id, limit=6)
-        pending = repo.take_pending(conn, session_id, requester.employee_id)
+        pending = repo.take_pending(conn, session_id, requester.employee_id,
+                                  max_age_minutes=self.settings.pending_ttl_minutes)
         ctx = tools.ToolContext(conn=conn, requester=requester, today=today, docs=self.kb.docs,
                                 holidays_by_doc=self.kb.holidays_by_doc, holiday_names=self.kb.holiday_names)
         try:
@@ -175,7 +176,7 @@ class Orchestrator:
         if cat == "leave_action":
             kind = (plan.action or {}).get("type")
             if kind == "apply_leave":
-                
+
                 return self._propose_apply(ctx, session_id, plan, message, history)
             if kind == "cancel_leave":
                 return self._propose_cancel(ctx, session_id, plan, message)
@@ -268,7 +269,7 @@ class Orchestrator:
             prepared.append((read, value))
         if len(others) > 1:
             return None, refuse(R.BULK)
-        for read, target_id in prepared:
+        for _read, target_id in prepared:
             # Pre-check with the same rule the tool enforces, so a refusal carries no tool call.
             if target_id and not can_view_leave_of(ctx.requester, repo.get_employee(ctx.conn, target_id)):
                 return None, refuse(EMPLOYEE_REFUSAL)

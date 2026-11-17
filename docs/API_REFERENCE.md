@@ -5,7 +5,18 @@ employee IDs from the provided assessment database (`data/veltrix.db`): `E2004` 
 (employee, DE), `E2002` (manager), `E1001` (HR). The automated tests use the synthetic IDs in
 `tests/fixtures.py` (`E100`–`E410`) instead.
 
-There is no login: identity is the `X-Employee-Id` header, as the assessment specifies.
+How the caller is identified depends on `AUTH_MODE` (see [DEPLOYMENT.md](DEPLOYMENT.md#authentication)):
+
+| `AUTH_MODE` | What the caller sends | Use |
+|---|---|---|
+| `header` (default) | `X-Employee-Id` only, trusted as sent | development and the original assessment contract; refused when `APP_ENV=production` |
+| `gateway` | `X-Employee-Id` set by your authenticating proxy, plus `X-Gateway-Token: <AUTH_GATEWAY_TOKEN>` | behind an SSO / API gateway |
+| `jwt` | `Authorization: Bearer <token>`; the employee ID is the token's `sub` claim (configurable). `X-Employee-Id` is optional and must match if sent | direct calls from an app with an identity provider |
+
+The examples below use `header` mode.
+
+Every response carries an `X-Request-Id` header. Send your own (8–64 characters of `A-Z a-z 0-9 . _ -`)
+to correlate logs across services; otherwise one is generated. On `/chat` it equals `request_id` in the body.
 
 ## `POST /chat`
 
@@ -15,7 +26,10 @@ Send one message in a conversation.
 
 | Header | Required | Notes |
 |---|---|---|
-| `X-Employee-Id` | yes | Must match `employees.employee_id`. Leading and trailing spaces are ignored. |
+| `X-Employee-Id` | `header` / `gateway` modes | Must match `employees.employee_id`. Leading and trailing spaces are ignored. |
+| `Authorization` | `jwt` mode | `Bearer <token>` |
+| `X-Gateway-Token` | `gateway` mode | Shared secret proving the request came through the gateway |
+| `X-Request-Id` | no | Correlation ID, echoed back |
 | `Content-Type` | should be `application/json` | The body is parsed as JSON whatever the header says. |
 
 ### Request body
@@ -73,8 +87,10 @@ Route rules, enforced by `orchestrator._enforce_route_contract`:
 |---|---|---|
 | `200` | Every answer, including refusals, clarifications and LLM outages | response body above |
 | `400` | Body missing or invalid (and the header is valid) | `{"detail": "body must be JSON with non-empty string fields session_id and message"}` |
-| `401` | Header missing, blank, or not in the database (checked **before** the body) | `{"detail": "missing or unknown X-Employee-Id"}` |
+| `400` | Body larger than 64 KB (it is not read in full) | as above |
+| `401` | Header missing, blank, or not in the database (checked **before** the body) | `{"detail": "missing or unknown X-Employee-Id"}` (`header` mode) or `{"detail": "missing or invalid credentials"}` (`gateway` / `jwt`) |
 | `403` | `session_id` already belongs to another employee | `{"detail": "session belongs to another employee"}` |
+| `429` | More than `RATE_LIMIT_PER_MINUTE` requests from this employee in the last minute | `{"detail": "too many requests"}` with a `Retry-After` header |
 | `503` | Ingestion has not finished | `{"detail": "service is starting"}` |
 | `500` | Unexpected server error outside the orchestrator | `{"detail": "internal error"}` |
 
@@ -167,13 +183,27 @@ curl -s -w ' %{http_code}\n' localhost:8000/health
 `/health` does not check the LLM provider: the service can be ready while LLM calls fail (they degrade to
 `clarify`).
 
+`GET /readyz` is the same check under the conventional Kubernetes name.
+
+## `GET /livez`
+
+Liveness check: `200 {"status": "ok"}` while the process serves HTTP, including during ingestion.
+`503 {"status": "error"}` if start-up failed, so an orchestrator restarts the container.
+
+## `GET /metrics`
+
+Prometheus metrics (`hr_http_requests_total`, `hr_http_request_duration_seconds`, `hr_chat_responses_total`
+by route, `hr_chat_timeouts_total`, `hr_auth_failures_total`, `hr_rate_limited_total`, `hr_ready`,
+`hr_retention_purged_total`). Labels never contain employee IDs, session IDs or message text. `404` when
+`METRICS_ENABLED=false`. Do not route it through your public ingress.
+
 ## `GET /` (optional test UI)
 
-Serves `app/static/index.html`, a single page that calls only `/chat` and `/health`. It is not part of the
-assessment contract and has no extra privileges; it sends whatever `X-Employee-Id` you type. Open
-`http://localhost:8000/`.
+Serves `app/static/index.html`, a single page that calls only `/chat` and `/health`. It has no extra
+privileges; it sends whatever `X-Employee-Id` you type, so it only works in `header` mode. Open
+`http://localhost:8000/`. Off by default when `APP_ENV=production` (`UI_ENABLED`); returns `404` when off.
 
 ## Not implemented
 
 There are no other endpoints: no login, no direct tool endpoints, no admin or re-ingest endpoint.
-FastAPI's `/docs` and `/redoc` are disabled (`docs_url=None, redoc_url=None` in `app/main.py`).
+FastAPI's `/docs`, `/redoc` and `/openapi.json` are disabled in `app/main.py`.

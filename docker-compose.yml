@@ -19,3 +19,4 @@ services:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-}
     restart: unless-stopped
+    stop_grace_period: 35s   # lets in-flight chat turns (up to 30 s) finish on shutdown

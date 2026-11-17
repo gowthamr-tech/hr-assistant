@@ -115,7 +115,7 @@ def parse_json_object(raw: str) -> dict:
     except json.JSONDecodeError:
         start, end = text.find("{"), text.rfind("}")
         if start < 0 or end <= start:
-            raise LLMError("model did not return JSON")
+            raise LLMError("model did not return JSON") from None
         try:
             value = json.loads(text[start:end + 1])
         except json.JSONDecodeError as exc:

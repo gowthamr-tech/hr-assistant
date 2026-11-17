@@ -6,7 +6,6 @@ import time
 import pytest
 
 from app.api import routes
-from app.db import repositories as repo
 from app.db.database import connect
 from app.llm.client import schema_violation
 from app.llm import prompts

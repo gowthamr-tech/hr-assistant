@@ -5,12 +5,12 @@ import pytest
 
 from app.ingestion.models import Chunk, DocMeta
 from app.ingestion.pipeline import IngestionReport, KnowledgeBase
-from app.llm.client import CorpusBudgetExceeded, LLMClient, corpus_token_count
+from app.llm.client import CorpusBudgetExceeded, corpus_token_count
 from app.llm.tokens import count_tokens
 from app.orchestration.rag import RagEngine
 from app.retrieval.index import HybridIndex
 from tests.conftest import employee
-from tests.fakes import FakeProvider, make_client, plan
+from tests.fakes import make_client, plan
 
 
 def test_client_refuses_over_budget():

@@ -1,6 +1,17 @@
 .venv
 .git
+.github
 data
 logs
+docs
 **/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
 .env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

@@ -81,17 +81,17 @@ def chunk_document(doc: ExtractedDoc, max_tokens: int = MAX_CHUNK_TOKENS) -> lis
         buf_page: Optional[int] = None
         buf_tokens = 0
 
-        def emit():
+        def emit():  # called only within this iteration, so loop variables are current
             nonlocal buf, buf_page, buf_tokens
             if not buf:
                 return
-            text = prefix + "\n".join(buf)
+            text = prefix + "\n".join(buf)  # noqa: B023
             idx = len(chunks)
             chunks.append(Chunk(
                 chunk_id=f"{doc.meta.doc_id}#{idx}",
                 doc_id=doc.meta.doc_id,
-                heading=heading,
-                locator=_locator(doc, heading, buf_page),
+                heading=heading,  # noqa: B023
+                locator=_locator(doc, heading, buf_page),  # noqa: B023
                 text=text,
                 page=buf_page,
                 token_count=count_tokens(text),

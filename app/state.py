@@ -9,6 +9,7 @@ from app.config import Settings
 if TYPE_CHECKING:  # type hints only; importing these at runtime would pull in the whole app
     from app.ingestion.pipeline import KnowledgeBase
     from app.orchestration.orchestrator import Orchestrator
+    from app.security.ratelimit import RateLimiter
 
 
 @dataclass
@@ -16,6 +17,7 @@ class ServiceState:
     settings: Optional[Settings] = None
     kb: Optional[KnowledgeBase] = None
     orchestrator: Optional[Orchestrator] = None
+    limiter: Optional[RateLimiter] = None
     ready: bool = False
     failed: bool = False
 

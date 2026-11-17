@@ -18,7 +18,7 @@ from app.ingestion.pipeline import KnowledgeBase
 from app.llm import prompts
 from app.llm.client import LLMClient, LLMError, corpus_token_count
 from app.policy.eligibility import eligible_docs, upcoming_docs
-from app.policy.precedence import Claim, Resolution, UpcomingChange, find_upcoming, resolve_all
+from app.policy.precedence import Claim, find_upcoming, resolve_all
 
 log = logging.getLogger(__name__)
 
