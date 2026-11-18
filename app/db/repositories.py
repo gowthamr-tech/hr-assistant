@@ -241,6 +241,118 @@ def purge_expired(conn: sqlite3.Connection, retention_days: int, pending_ttl_min
     return counts
 
 
+# ---------------------------------------------------------------- support tickets
+@dataclass(frozen=True)
+class Ticket:
+    ticket_id: str
+    employee_id: str
+    category: str
+    priority: str
+    subject: str
+    description: str
+    status: str
+    assignee_id: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class TicketEvent:
+    ticket_id: str
+    author_id: str
+    kind: str  # "created" | "comment" | "status" | "assigned"
+    body: str
+    created_at: str
+
+
+_TICKET_COLS = ("ticket_id, employee_id, category, priority, subject, description, status, assignee_id, "
+                "created_at, updated_at")
+_PRIORITY_ORDER = "CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END"
+_UNCHANGED = object()
+
+
+def _ticket(row: sqlite3.Row) -> Ticket:
+    return Ticket(**{k: row[k] for k in row.keys()})
+
+
+def insert_ticket(conn: sqlite3.Connection, t: Ticket) -> None:
+    conn.execute(
+        f"INSERT INTO assistant_tickets ({_TICKET_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (t.ticket_id, t.employee_id, t.category, t.priority, t.subject, t.description, t.status, t.assignee_id,
+         t.created_at, t.updated_at),
+    )
+
+
+def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> Optional[Ticket]:
+    row = conn.execute(f"SELECT {_TICKET_COLS} FROM assistant_tickets WHERE ticket_id = ?", (ticket_id,)).fetchone()
+    return _ticket(row) if row else None
+
+
+def list_tickets(conn: sqlite3.Connection, *, employee_id: Optional[str] = None, assignee_id: Optional[str] = None,
+                 statuses: Optional[Iterable[str]] = None, limit: int = 50) -> list[Ticket]:
+    sql = f"SELECT {_TICKET_COLS} FROM assistant_tickets WHERE 1 = 1"
+    params: list = []
+    if employee_id is not None:
+        sql += " AND employee_id = ?"
+        params.append(employee_id)
+    if assignee_id is not None:
+        sql += " AND assignee_id = ?"
+        params.append(assignee_id)
+    status_list = list(statuses or [])
+    if status_list:
+        sql += f" AND status IN ({','.join('?' for _ in status_list)})"
+        params.extend(status_list)
+    sql += f" ORDER BY {_PRIORITY_ORDER}, created_at, ticket_id LIMIT ?"
+    params.append(limit)
+    return [_ticket(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def count_tickets(conn: sqlite3.Connection, employee_id: str, statuses: Iterable[str]) -> int:
+    status_list = list(statuses)
+    row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM assistant_tickets WHERE employee_id = ? "
+        f"AND status IN ({','.join('?' for _ in status_list)})",
+        (employee_id, *status_list),
+    ).fetchone()
+    return int(row["n"])
+
+
+def update_ticket(conn: sqlite3.Connection, ticket_id: str, from_statuses: tuple[str, ...], *, status: str,
+                  assignee_id=_UNCHANGED) -> bool:
+    """Conditional update: only succeeds if the ticket is still in one of `from_statuses`."""
+    sets, params = ["status = ?", "updated_at = ?"], [status, _now_iso()]
+    if assignee_id is not _UNCHANGED:
+        sets.append("assignee_id = ?")
+        params.append(assignee_id)
+    placeholders = ",".join("?" for _ in from_statuses)
+    cur = conn.execute(
+        f"UPDATE assistant_tickets SET {', '.join(sets)} WHERE ticket_id = ? AND status IN ({placeholders})",
+        (*params, ticket_id, *from_statuses),
+    )
+    return cur.rowcount == 1
+
+
+def touch_ticket(conn: sqlite3.Connection, ticket_id: str) -> None:
+    conn.execute("UPDATE assistant_tickets SET updated_at = ? WHERE ticket_id = ?", (_now_iso(), ticket_id))
+
+
+def add_ticket_event(conn: sqlite3.Connection, ticket_id: str, author_id: str, kind: str, body: str) -> None:
+    conn.execute(
+        "INSERT INTO assistant_ticket_events (ticket_id, author_id, kind, body, created_at) VALUES (?, ?, ?, ?, ?)",
+        (ticket_id, author_id, kind, body, _now_iso()),
+    )
+
+
+def ticket_events(conn: sqlite3.Connection, ticket_id: str, limit: int = 20) -> list[TicketEvent]:
+    """The most recent `limit` events, oldest first."""
+    rows = conn.execute(
+        "SELECT ticket_id, author_id, kind, body, created_at FROM assistant_ticket_events WHERE ticket_id = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (ticket_id, limit),
+    ).fetchall()
+    return [TicketEvent(**{k: r[k] for k in r.keys()}) for r in reversed(rows)]
+
+
 # ---------------------------------------------------------------- holidays
 def replace_holidays(conn: sqlite3.Connection, rows: list[tuple[str, str, str]]) -> None:
     conn.execute("BEGIN IMMEDIATE")

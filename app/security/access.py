@@ -42,3 +42,16 @@ def can_view_leave_of(requester: Employee, target: Employee | None) -> bool:
 
 def can_use_team_leave(requester: Employee) -> bool:
     return requester.role == "manager"
+
+
+# Support tickets. A ticket can be about pay, health or the employee's own manager, so managers do
+# NOT see their reports' tickets: only the employee who raised it and the HR team do.
+def can_work_tickets(requester: Employee) -> bool:
+    """The HR team works the ticket queue: sees every ticket, takes, resolves and reopens them."""
+    return requester.role == "hr"
+
+
+def can_view_ticket(requester: Employee, owner_id: str | None) -> bool:
+    if owner_id is None:
+        return False
+    return owner_id == requester.employee_id or can_work_tickets(requester)

@@ -97,9 +97,13 @@ The `assistant_*` tables declare no foreign keys; the relationships above are lo
 | `assistant_turns` | `add_turn` | Conversation history; the interpreter reads the last 6 (`recent_turns`). |
 | `assistant_pending_actions` | `set_pending` / `take_pending` | At most one write proposal per session. |
 | `assistant_holidays` | `replace_holidays` (at every ingestion) | Holiday dates extracted from calendar documents. Tools use the in-memory copy (`KnowledgeBase.holidays_by_doc`); this table is for inspection. |
+| `assistant_tickets` | `insert_ticket`, `update_ticket`, `touch_ticket` (via `app/tools/ticket_tools.py`) | HR support tickets: `ticket_id` (`TKT-` + 8 hex), owner `employee_id`, `category`, `priority` (`low`/`normal`/`high`/`urgent`), `subject`, `description`, `status` (`open`/`in_progress`/`resolved`/`closed`), `assignee_id`, timestamps. Never purged by retention. |
+| `assistant_ticket_events` | `add_ticket_event` | Audit trail per ticket: `created`, `comment`, `status` (`old -> new`), `assigned`, with author and time. |
 
 Indexes added: `idx_assistant_turns_session (session_id, id)`, `idx_leave_requests_employee
-(employee_id, status)`, `idx_employees_manager (manager_id)`.
+(employee_id, status)`, `idx_employees_manager (manager_id)`, `idx_assistant_tickets_employee (employee_id,
+status)`, `idx_assistant_tickets_status (status, assignee_id)`, `idx_assistant_ticket_events_ticket
+(ticket_id, id)`.
 
 ## 3. Domain values
 

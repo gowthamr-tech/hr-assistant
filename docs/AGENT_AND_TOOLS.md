@@ -1,4 +1,21 @@
-# Orchestration and tools
+# Agents, orchestration and tools
+
+The assistant is a **supervisor with three specialist agents**. The supervisor
+(`app/orchestration/orchestrator.py::Orchestrator`) runs the guards and the interpreter, and its plan's
+`category` picks the agent; the agents live in `app/agents/`:
+
+| Category | Agent | Notes |
+|---|---|---|
+| `hr_question` | `PolicyAgent.answer` | retrieval, precedence, composition (§1.5) |
+| `leave_data` | `LeaveAgent.read`, then `LeaveAgent.answer` or `PolicyAgent.answer` | the policy agent receives the leave results for hybrid answers |
+| `leave_action` | `LeaveAgent.propose` | apply / cancel proposals |
+| `ticket` | `TicketAgent.handle` | create / list / view / comment / update_status (§5) |
+| confirmation of a pending proposal | the agent whose `write_tools` contains the proposal's tool | `Orchestrator._execute_pending` |
+
+`ChatResult.agent` records which agent answered (`supervisor`, `policy`, `leave`, `leave+policy`,
+`ticket`). It is logged with every turn and counted in `hr_chat_agent_total{agent}`; it is not part of the
+`/chat` body, whose contract is unchanged. Shared helpers for resolving people (`visible_ids`,
+`resolve_target`, `names_someone_else`) are in `app/agents/people.py`.
 
 The orchestration layer is **code-driven**: the LLM proposes a plan, and code checks and executes it. The
 model never calls a tool itself. There is no function-calling loop.
@@ -162,3 +179,25 @@ All five are implemented in `app/tools/leave_tools.py` and covered by `tests/uni
 ## 4. Adding a tool
 
 See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#how-to-add-a-new-tool).
+
+## 5. Ticket agent and ticket tools
+
+`app/tools/ticket_tools.py`. Each tool takes the `ToolContext` and returns a `ToolResult`; the owner of a new
+ticket is always `ctx.requester`. Visibility: `access.can_view_ticket` (the owner, or HR); the queue:
+`access.can_work_tickets` (HR). Someone else's ticket and a missing one give the same `not_found` answer.
+
+| Tool | Kind | Rules |
+|---|---|---|
+| `create_ticket(ctx, category, priority, subject, description, dry_run=False)` | write | category and priority from fixed lists; subject ≤ 120 and description ≤ 2,000 characters, control characters removed; at most 20 active tickets per employee |
+| `list_tickets(ctx, scope="mine", status=None)` | read | `mine` for everyone; `queue` and `assigned` for HR; open and in-progress by default for those two |
+| `get_ticket(ctx, ticket_id)` | read | ticket, last 20 events, the statuses the caller may move it to |
+| `comment_ticket(ctx, ticket_id, comment, dry_run=False)` | write | not on a closed ticket |
+| `update_ticket_status(ctx, ticket_id, status, note="", dry_run=False)` | write | HR: open ↔ in_progress → resolved → closed, resolved → open; owner: close, reopen once resolved; closed is final; HR taking an unassigned ticket becomes its assignee |
+
+Writes re-validate inside `write_transaction` and use a conditional status update, like the leave tools.
+In chat, the ticket agent always runs the dry run first and returns a proposal; the write happens only on
+"yes". Ticket answers are fixed templates in `responses.py` (`tickets_answer`, `ticket_detail_answer`,
+`ticket_*_proposal`, ...), so ticket text is never sent back through an LLM. The interpreter fills the
+`ticket` object of `ROUTER_SCHEMA` (`type`, `ticket_id`, `category`, `priority`, `subject`, `description`,
+`comment`, `status`, `scope`); without a ticket ID, the agent uses the requester's only active ticket or asks.
+

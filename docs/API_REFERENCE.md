@@ -1,6 +1,6 @@
 # API reference
 
-All endpoints are defined in `app/api/routes.py`. The service listens on port `8000`. The examples use
+All endpoints are defined in `app/api/routes.py`, except `/tickets`, which is in `app/api/tickets.py`. The service listens on port `8000`. The examples use
 employee IDs from the provided assessment database (`data/veltrix.db`): `E2004` (employee, IN), `E4004`
 (employee, DE), `E2002` (manager), `E1001` (HR). The automated tests use the synthetic IDs in
 `tests/fixtures.py` (`E100`–`E410`) instead.
@@ -203,7 +203,31 @@ Serves `app/static/index.html`, a single page that calls only `/chat` and `/heal
 privileges; it sends whatever `X-Employee-Id` you type, so it only works in `header` mode. Open
 `http://localhost:8000/`. Off by default when `APP_ENV=production` (`UI_ENABLED`); returns `404` when off.
 
+## `/tickets` (HR support tickets)
+
+Same authentication, rate limit and `Cache-Control: no-store` as `/chat`. The handlers call the same tools
+as the ticket agent (`app/tools/ticket_tools.py`), so permissions are identical. An API call is an explicit
+action, so writes apply immediately (no "yes" step). Errors are `{"detail": "..."}`.
+
+| Method and path | Body | Success | Notes |
+|---|---|---|---|
+| `GET /tickets?scope=mine\|queue\|assigned&status=...` | none | `200 {"tickets": [...], "truncated": bool}` | `queue` (all open / in-progress tickets) and `assigned` are HR only → `403` otherwise. At most 50, urgent first. |
+| `POST /tickets` | `{"subject", "description", "category"?, "priority"?}` | `201 {"ticket": {...}}` | category default `other`, priority default `normal`. `429` with 20 active tickets already. |
+| `GET /tickets/{ticket_id}` | none | `200 {"ticket", "events", "allowed_statuses"}` | `404` for someone else's ticket and for a missing one alike. |
+| `POST /tickets/{ticket_id}/comments` | `{"comment"}` | `201 {"ticket"}` | `409` on a closed ticket. |
+| `PATCH /tickets/{ticket_id}` | `{"status", "note"?}` | `200 {"ticket", "previous_status"}` | `409` for a transition the caller may not make (see README, ticketing rules). |
+
+A ticket object: `ticket_id`, `raised_by`, `category`, `priority`, `subject`, `status`, `assignee_id`,
+`created_at`, `updated_at` (and `description` on single-ticket responses).
+
+```bash
+curl -s localhost:8000/tickets -H 'X-Employee-Id: E2004' -H 'Content-Type: application/json' \
+     -d '{"subject": "Experience letter", "description": "I need an experience letter for a visa.", "category": "documents"}'
+curl -s -X PATCH localhost:8000/tickets/TKT-1A2B3C4D -H 'X-Employee-Id: E1001' -H 'Content-Type: application/json' \
+     -d '{"status": "in_progress", "note": "Taking this one."}'
+```
+
 ## Not implemented
 
-There are no other endpoints: no login, no direct tool endpoints, no admin or re-ingest endpoint.
+There are no other endpoints: no login, no direct leave tool endpoints, no admin or re-ingest endpoint.
 FastAPI's `/docs`, `/redoc` and `/openapi.json` are disabled in `app/main.py`.

@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import metrics
 from app.api.middleware import RequestContextMiddleware
 from app.api.routes import router, shutdown_handler_pool
+from app.api.tickets import router as tickets_router
 from app.config import Settings, get_settings
 from app.db import repositories as repo
 from app.db.database import connection, verify_and_migrate
@@ -117,10 +118,11 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     application = FastAPI(title="HR Assistant", lifespan=lifespan,
                           docs_url=None, redoc_url=None, openapi_url=None)
     application.include_router(router)
+    application.include_router(tickets_router)
     if settings.cors_allow_origins:
         allowed_headers = ["Content-Type", "X-Employee-Id", "X-Request-Id", "Authorization"]
         application.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_allow_origins),
-                                   allow_methods=["GET", "POST"], allow_headers=allowed_headers,
+                                   allow_methods=["GET", "POST", "PATCH"], allow_headers=allowed_headers,
                                    expose_headers=["X-Request-Id", "Retry-After"], max_age=600)
     # Added last, so it is outermost: every response (CORS preflights included) gets the headers.
     application.add_middleware(RequestContextMiddleware, hsts=settings.is_production)

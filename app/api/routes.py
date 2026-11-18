@@ -1,4 +1,4 @@
-"""HTTP API: POST /chat, health probes (/health, /livez, /readyz) and /metrics."""
+"""HTTP API: POST /chat, health probes (/health, /livez, /readyz) and /metrics. Tickets: app/api/tickets.py."""
 from __future__ import annotations
 
 import asyncio

@@ -38,6 +38,29 @@ CREATE TABLE IF NOT EXISTS assistant_holidays (
     name         TEXT NOT NULL,
     PRIMARY KEY (doc_id, holiday_date, name)
 );
+CREATE TABLE IF NOT EXISTS assistant_tickets (
+    ticket_id    TEXT PRIMARY KEY,
+    employee_id  TEXT NOT NULL,
+    category     TEXT NOT NULL,
+    priority     TEXT NOT NULL,
+    subject      TEXT NOT NULL,
+    description  TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    assignee_id  TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_tickets_employee ON assistant_tickets(employee_id, status);
+CREATE INDEX IF NOT EXISTS idx_assistant_tickets_status ON assistant_tickets(status, assignee_id);
+CREATE TABLE IF NOT EXISTS assistant_ticket_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id    TEXT NOT NULL REFERENCES assistant_tickets(ticket_id),
+    author_id    TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_ticket_events_ticket ON assistant_ticket_events(ticket_id, id);
 CREATE INDEX IF NOT EXISTS idx_leave_requests_employee ON leave_requests(employee_id, status);
 CREATE INDEX IF NOT EXISTS idx_employees_manager ON employees(manager_id);
 """

@@ -65,7 +65,7 @@ class RequestContextMiddleware:
                 headers.append((b"x-request-id", request_id.encode()))
                 headers.extend(_SECURITY_HEADERS)
                 headers.append(_UI_CSP if path == "/" else _API_CSP)
-                if path == "/chat":  # answers contain personal data: never cache them
+                if label in ("/chat", "/tickets"):  # personal data: never cache it
                     headers.append((b"cache-control", b"no-store"))
                 if self.hsts:
                     headers.append((b"strict-transport-security", b"max-age=31536000; includeSubDomains"))

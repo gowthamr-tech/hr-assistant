@@ -1,7 +1,9 @@
 # HR Assistant
 
-An HR assistant over HTTP. It answers policy questions from the Veltrix HR corpus with citations, and reads
-and changes leave data through five permission-checked tools. Identity, role and region always come from
+A multi-agent HR assistant over HTTP. A supervisor routes each message to a specialist agent: the **policy
+agent** answers questions from the Veltrix HR corpus with citations, the **leave agent** reads and changes
+leave data through five permission-checked tools, and the **ticket agent** runs an HR support ticketing
+system (raise, follow up, comment, close / reopen; an HR queue). Tickets are also available over a REST API. Identity, role and region always come from
 `veltrix.db` via the `X-Employee-Id` header. Everything the assessment calls a "must" is enforced in code,
 not in prompts.
 
@@ -32,7 +34,7 @@ make install && make check     # ruff + pytest locally (needs tesseract for the 
 make docker-test               # the same suite inside the image's `test` stage
 ```
 
-The suite (236 tests) uses a scripted fake LLM and a synthetic corpus and database built by
+The suite (266 tests) uses a scripted fake LLM and a synthetic corpus and database built by
 `tests/fixtures.py`, so it needs no API key and does not depend on the contents of `./data`. One extra
 test ingests the real `./data` corpus when it is present.
 
@@ -63,6 +65,44 @@ naming the variable. The default model is
 `claude-opus-5-5` with `effort: low`. Anthropic's server-side refusal fallback is on by default
 (`ANTHROPIC_REFUSAL_FALLBACK`); if an account rejects it, the client turns it off and retries the same call
 without it.
+
+## Multi-agent design
+
+```mermaid
+flowchart LR
+    U[POST /chat] --> S[Supervisor<br/>guards · interpreter · confirmation]
+    S -->|hr_question| P[Policy agent<br/>RAG · precedence · citations]
+    S -->|leave_data / leave_action| L[Leave agent<br/>5 leave tools]
+    L -->|balances for hybrid answers| P
+    S -->|ticket| T[Ticket agent<br/>5 ticket tools]
+    API[/tickets REST API/] --> TT
+    T --> TT[(assistant_tickets<br/>assistant_ticket_events)]
+    S -->|"yes" to a pending proposal| X{owner of the tool}
+    X --> L
+    X --> T
+```
+
+| Agent | Code | Handles |
+|---|---|---|
+| Supervisor | `app/orchestration/orchestrator.py` | guards, the interpreter's routing decision, pending proposals, the route contract, saving the turn |
+| Policy agent | `app/agents/policy_agent.py` | document answers; hybrid answers using leave data gathered by the leave agent |
+| Leave agent | `app/agents/leave_agent.py` | balances, requests, team leave; apply / cancel proposals |
+| Ticket agent | `app/agents/ticket_agent.py` | `create_ticket`, `list_tickets`, `get_ticket`, `comment_ticket`, `update_ticket_status` |
+
+Ticketing rules (enforced in `app/tools/ticket_tools.py`, the same for chat and REST):
+- Anyone raises tickets for themselves and sees, comments on, closes or reopens (once resolved) their own.
+- Only HR (`role = hr`) sees the queue and every ticket, and moves tickets to in progress (taking an
+  unassigned ticket assigns it to them) or resolved. Managers do **not** see their reports' tickets.
+- Statuses: `open → in_progress → resolved → closed`; `closed` is final. Every change is recorded in
+  `assistant_ticket_events`.
+- In chat, every ticket write is a proposal the employee confirms with "yes", like leave writes. When the
+  documents can't answer a question, the reply offers to raise a ticket for it.
+
+```bash
+curl -s localhost:8000/chat -H 'Content-Type: application/json' -H 'X-Employee-Id: E2004' \
+     -d '{"session_id": "demo-2", "message": "Raise a ticket: my October payslip is missing overtime"}'
+curl -s localhost:8000/tickets?scope=queue -H 'X-Employee-Id: <an HR employee ID>'
+```
 
 ## Architecture
 
@@ -97,8 +137,10 @@ flowchart LR
 | Ingestion (formats, tables, OCR, metadata) | `app/ingestion/extractors.py`, `pipeline.py`, `chunker.py`, `holidays.py` |
 | Retrieval | `app/retrieval/index.py`, `app/orchestration/rag.py::select_sources` |
 | Section 5 rules | `app/policy/eligibility.py`, `app/policy/precedence.py`, `app/policy/calendar.py` |
-| Orchestration and routes | `app/orchestration/orchestrator.py`, `guards.py`, `responses.py` |
+| Supervisor and routes | `app/orchestration/orchestrator.py`, `guards.py`, `responses.py` |
+| Specialist agents | `app/agents/policy_agent.py`, `leave_agent.py`, `ticket_agent.py` |
 | Tools and leave rules | `app/tools/leave_tools.py` |
+| Support tickets (tools, REST API) | `app/tools/ticket_tools.py`, `app/api/tickets.py` |
 | Data access | `app/db/repositories.py`, `app/db/database.py` |
 | Access control, personal data | `app/security/access.py`, `app/security/pii.py`, `app/logging_setup.py` |
 | LLM providers and token budget | `app/llm/client.py`, `app/llm/prompts.py`, `app/llm/tokens.py` |
@@ -203,3 +245,7 @@ flowchart LR
 - **Single process, single host.** Session state is in SQLite on a local volume and the index is rebuilt in
   memory at start-up, so run exactly one replica (docs/DEPLOYMENT.md, "Scaling"). Scaling out needs the
   leave and session tables in a shared database such as PostgreSQL. See DESIGN.md for 10,000 documents.
+- **Tickets: no notifications or SLAs yet.** Nobody is emailed when a ticket is raised or changes; HR
+  works the queue with `GET /tickets?scope=queue` or by asking the assistant. The deterministic
+  personal-data guard runs before routing, so a ticket message that contains "phone number" (e.g. "update
+  my phone number") is refused; rephrase it ("update my contact details"), or use `POST /tickets`.

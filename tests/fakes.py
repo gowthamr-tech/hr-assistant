@@ -14,7 +14,8 @@ from app.llm.client import LLMClient
 
 
 def plan(category="hr_question", *, search_query="", needs_documents=None, reads=None, action=None,
-         reference_date="", date_problem="", needs_clarification=False, clarification_question="") -> dict:
+         reference_date="", date_problem="", needs_clarification=False, clarification_question="",
+         ticket=None) -> dict:
     if needs_documents is None:
         needs_documents = category == "hr_question"
     full_reads = []
@@ -25,8 +26,12 @@ def plan(category="hr_question", *, search_query="", needs_documents=None, reads
     act = {"type": "none", "target": "self", "leave_type": "", "start_date": "", "end_date": "", "dates_explicit_year": False,
            "request_id": "", "match_start_date": "", "match_end_date": ""}
     act.update(action or {})
+    tkt = {"type": "none", "ticket_id": "", "category": "", "priority": "", "subject": "", "description": "",
+           "comment": "", "status": "", "scope": ""}
+    tkt.update(ticket or {})
     return {"category": category, "needs_documents": needs_documents, "search_query": search_query,
-            "reference_date": reference_date, "reads": full_reads, "action": act, "date_problem": date_problem,
+            "reference_date": reference_date, "reads": full_reads, "action": act, "ticket": tkt,
+            "date_problem": date_problem,
             "needs_clarification": needs_clarification, "clarification_question": clarification_question}
 
 

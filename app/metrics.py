@@ -10,6 +10,8 @@ HTTP_LATENCY = Histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 20, 30, 45),
 )
 CHAT_ROUTES = Counter("hr_chat_responses_total", "Chat answers by route", ["route"])
+CHAT_AGENTS = Counter("hr_chat_agent_total", "Chat answers by the agent that produced them", ["agent"])
+TICKET_WRITES = Counter("hr_ticket_writes_total", "Support ticket writes (chat and API)", ["action"])
 CHAT_TIMEOUTS = Counter("hr_chat_timeouts_total", "Chat turns that hit the request deadline")
 AUTH_FAILURES = Counter("hr_auth_failures_total", "Rejected credentials")
 RATE_LIMITED = Counter("hr_rate_limited_total", "Requests rejected by the rate limiter")
@@ -20,7 +22,11 @@ KNOWN_PATHS = {"/", "/chat", "/health", "/livez", "/readyz", "/metrics"}
 
 
 def path_label(path: str) -> str:
-    return path if path in KNOWN_PATHS else "other"
+    if path in KNOWN_PATHS:
+        return path
+    if path == "/tickets" or path.startswith("/tickets/"):
+        return "/tickets"  # ticket IDs never become label values
+    return "other"
 
 
 def render() -> tuple[bytes, str]:
