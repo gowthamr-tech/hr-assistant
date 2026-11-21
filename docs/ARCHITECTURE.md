@@ -131,7 +131,7 @@ These are pure functions with no I/O, which is why they are unit-tested directly
 
 | Module | Responsibility |
 |---|---|
-| `orchestrator.py` | `Orchestrator.handle` runs one turn. `_dispatch` picks the path; `_answer` handles reads and documents; `_propose_apply` / `_propose_cancel` / `_execute_pending` handle writes; `_enforce_route_contract` keeps the route rules. |
+| `orchestrator.py` | `Orchestrator.handle` runs one turn through a LangGraph `StateGraph` (`build_graph`). Nodes call the agents; edge functions (`_route_pending`, `_route_plan`, `_route_after_reads`) pick the path; `route_contract` (`_enforce_route_contract`) keeps the route rules. Persistence stays in `handle`. |
 | `rag.py` | `RagEngine.select_sources`, `gather_facts`, `compose`. |
 | `guards.py` | Regex checks: `is_manipulation`, `is_bulk_request`, `is_personal_data_request`, `is_confirmation`, `is_rejection`, `leave_type_stated`; plus `date_context` for date resolution. |
 | `responses.py` | Fixed messages (`EMPLOYEE_REFUSAL` lives in `security/access.py`) and templates for tool answers. |

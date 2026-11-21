@@ -30,7 +30,7 @@ workflows with the functions responsible at each step. Component background is i
 
 *Example: an India-based employee asks "How many sick days do I get?"*
 
-1. **Pending proposal?** None, so nothing to confirm (`_dispatch`).
+1. **Pending proposal?** None, so nothing to confirm (`_route_pending`, the graph's first edge).
 2. **Guards.** `guards.is_manipulation`, `is_bulk_request` and `is_personal_data_request` all return false.
 3. **Classification.** `Orchestrator._interpret` makes **LLM call 1**. Its prompt has the requester's ID,
    role and region, a date table (`guards.date_context`), the pending proposal and the recent history;

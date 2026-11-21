@@ -28,9 +28,9 @@ README.md, DESIGN.md (assessment deliverables), docs/
 
 `uvicorn app.main:app` → `lifespan` → `setup_logging` → background `initialise()` → `STATE.ready`.
 
-Per request: `routes.chat` → `Orchestrator.handle` → `_dispatch` →
-(`_execute_pending` | guards | `_interpret` → `_answer` / `_propose_apply` / `_propose_cancel`) →
-`_enforce_route_contract` → storage → JSON response.
+Per request: `routes.chat` → `Orchestrator.handle` → LangGraph `self.graph.invoke` →
+(`execute_pending` | `guards` → `interpret` → `ticket_agent` / `leave_propose` / `leave_read` /
+`policy_agent`) → `route_contract` → storage (in `handle`) → JSON response.
 
 ## 3. Configuration
 
@@ -58,7 +58,8 @@ All settings come from environment variables, loaded once by `config.get_setting
 2. `plan` shows the interpreter's decision; `llm call` shows each LLM call; `precedence resolved` shows
    the document decisions; `chat handled` shows the outcome.
 3. To step through a request in a debugger, reproduce it in a test with `chat_factory`. It runs the real
-   orchestrator with a scripted LLM, so you can put breakpoints in `Orchestrator._dispatch`.
+   orchestrator with a scripted LLM, so you can put breakpoints in the graph's node methods (`Orchestrator._node_*`) or edge functions
+   (`_route_plan`, `_route_after_reads`).
 
 ## 5. How to…
 

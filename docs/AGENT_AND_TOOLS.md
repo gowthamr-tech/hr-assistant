@@ -43,23 +43,34 @@ LLM call 1 uses `ROUTER_SYSTEM` and `ROUTER_SCHEMA` (`app/llm/prompts.py`) and r
 - the last 6 turns, with names of employees the requester may see mapped to IDs and all others replaced
   by `[name]` (`NameRegistry.replace_names`)
 
-### 1.2 Route selection: `Orchestrator._dispatch`
+### 1.2 Route selection: the supervisor's LangGraph
 
-Checked in this order:
+The turn is a LangGraph `StateGraph` built once in `Orchestrator.build_graph`. Nodes do the work
+(they call agents and tools); the conditional edges are pure functions in `orchestrator.py` that only
+read the state (`_route_pending`, `_route_plan`, `_done_or_answer`, `_route_after_reads`). The LLM never
+picks an edge by calling a tool: code reads the interpreter's plan. The order is:
 
-1. A pending proposal exists and `is_confirmation` → `_execute_pending`. A bare `is_rejection` →
-   `clarify` (`PROPOSAL_DISCARDED`). Anything else: the proposal is already discarded, so continue.
-2. Regex guards → `refuse`: `is_manipulation` (`MANIPULATION`), `is_bulk_request` (`BULK`),
+1. `START` → `_route_pending`: a pending proposal and `is_confirmation` → `execute_pending` (the owning
+   agent's `execute`). A bare `is_rejection` → `discard_pending` (`clarify`, `PROPOSAL_DISCARDED`).
+   Anything else: the proposal is already discarded, so continue to `guards`.
+2. `guards` node, regex → `refuse`: `is_manipulation` (`MANIPULATION`), `is_bulk_request` (`BULK`),
    `is_personal_data_request` (`PERSONAL`). These run before any LLM call.
-3. Interpreter categories: `manipulation`, `bulk_request`, `personal_data_request`, `off_topic` →
-   `refuse`; `greeting` → `clarify` (`GREETING`).
-4. `leave_action` → `_propose_apply` or `_propose_cancel`.
-5. `leave_data` with no reads and `needs_clarification` → `clarify` with the fixed
-   `CLARIFY_EMPLOYEE_OR_PERIOD` text (the model's own wording could echo names or IDs).
-6. Everything else → `_answer` (reads and/or documents → `tool`, `rag`, `hybrid` or `no_answer`).
+3. `interpret` node (LLM call 1), then `_route_plan` on the category:
+   - `manipulation`, `bulk_request`, `personal_data_request`, `off_topic` → `fixed_reply` (`refuse`);
+     `greeting` → `fixed_reply` (`clarify`, `GREETING`).
+   - `ticket` → `ticket_agent`.
+   - `leave_action` → `leave_propose` (`_propose_apply` or `_propose_cancel`). If the plan holds no
+     action, the turn falls through to the answer path below.
+   - `leave_data` with no reads and `needs_clarification` → `fixed_reply` with the fixed
+     `CLARIFY_EMPLOYEE_OR_PERIOD` text (the model's own wording could echo names or IDs).
+   - Plan with reads → `leave_read`, then `leave_answer` (`tool`) or, when rules are needed,
+     `policy_agent` (`hybrid`). No reads → `policy_agent` (`rag` or `no_answer`).
+4. Every path ends in `route_contract` (`_enforce_route_contract`), which makes the final result follow
+   the route rules, e.g. `rag` without citations becomes `no_answer`.
 
-`_enforce_route_contract` makes the final result follow the route rules, e.g. `rag` without citations
-becomes `no_answer`.
+No LangGraph checkpointer is used: `Orchestrator.handle` stores the turn and any proposal in one
+SQLite transaction after the graph returns, as before. Print the graph with
+`Orchestrator(...).graph.get_graph().draw_mermaid()`.
 
 ### 1.3 Argument validation and authorisation
 

@@ -34,7 +34,7 @@ make install && make check     # ruff + pytest locally (needs tesseract for the 
 make docker-test               # the same suite inside the image's `test` stage
 ```
 
-The suite (266 tests) uses a scripted fake LLM and a synthetic corpus and database built by
+The suite (281 tests) uses a scripted fake LLM and a synthetic corpus and database built by
 `tests/fixtures.py`, so it needs no API key and does not depend on the contents of `./data`. One extra
 test ingests the real `./data` corpus when it is present.
 
@@ -68,6 +68,11 @@ without it.
 
 ## Multi-agent design
 
+The supervisor is a [LangGraph](https://github.com/langchain-ai/langgraph) `StateGraph`
+(`Orchestrator.build_graph`). Each agent is a node; conditional edges are plain functions that read the
+interpreter's plan, so the LLM decides the category but never calls a tool or picks a node itself. The
+turn is saved by `Orchestrator.handle` in one SQLite transaction, so no LangGraph checkpointer is used.
+
 ```mermaid
 flowchart LR
     U[POST /chat] --> S[Supervisor<br/>guards · interpreter · confirmation]
@@ -84,7 +89,7 @@ flowchart LR
 
 | Agent | Code | Handles |
 |---|---|---|
-| Supervisor | `app/orchestration/orchestrator.py` | guards, the interpreter's routing decision, pending proposals, the route contract, saving the turn |
+| Supervisor (LangGraph) | `app/orchestration/orchestrator.py` | the graph: guards, the interpreter's routing decision, pending proposals, the route contract; `handle` saves the turn |
 | Policy agent | `app/agents/policy_agent.py` | document answers; hybrid answers using leave data gathered by the leave agent |
 | Leave agent | `app/agents/leave_agent.py` | balances, requests, team leave; apply / cancel proposals |
 | Ticket agent | `app/agents/ticket_agent.py` | `create_ticket`, `list_tickets`, `get_ticket`, `comment_ticket`, `update_ticket_status` |
@@ -162,7 +167,7 @@ flowchart LR
 | 7.4 Personal data in logs, answers, prompts | `security/pii.py`, `logging_setup.PiiScrubFilter`, `orchestrator._llm_safe_tool_data` | `security/test_access_and_pii.py` |
 | 7.5 Prompt injection (documents and users) | `guards.py`, prompt framing, tools never driven by documents | integration |
 | 8.1 Exactly one route, citation/tool invariants | `orchestrator._enforce_route_contract` | `integration/conftest.check_contract` (every response) |
-| 8.2 Propose → confirm, single pending, revalidation | `orchestrator._dispatch`, `_propose_*`, `_execute_pending` | integration |
+| 8.2 Propose → confirm, single pending, revalidation | `orchestrator._route_pending`, `_propose_*`, `execute_pending` node | integration |
 | 8.3 / 8.4 Clarify, dates | `orchestrator._propose_apply`, `guards.date_context` | integration, `unit/test_guards_and_pii.py` |
 | 9 API contract, `/health` 503 until ready, 30 s budget | `api/routes.py`, `main.initialise` | integration |
 | 10 Docker, `./data` mount, `.env.example` | `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh` | CI `docker` job |

@@ -1,18 +1,38 @@
 """Supervisor: one message in, one specialist agent (or two) out, exactly one route.
 
+The turn is a LangGraph ``StateGraph`` (built once in ``build_graph``):
+
+    START ─┬─ confirmed pending proposal ──> execute_pending ───────────────┐
+           ├─ "no" to a pending proposal ──> discard_pending ───────────────┤
+           └─> guards ── refused ───────────────────────────────────────────┤
+                 └─> interpret (LLM) ─┬─ refuse / greeting / clarify ─> fixed_reply ──┤
+                                      ├─ ticket ──────> ticket_agent ───────┤
+                                      ├─ leave_action > leave_propose ──────┤
+                                      │                  └ (no proposal) ┐  │
+                                      ├─ reads ───────> leave_read ─┬─ problem ───────┤
+                                      │                             ├─> leave_answer ─┤
+                                      │                             └─> policy_agent ─┤
+                                      └─ documents ─────────────────> policy_agent ───┤
+                                                                      route_contract <┘ ─> END
+
 Order of decisions for every message:
   1. A pending proposal is consumed. A clear confirmation hands it to the agent that owns the
      tool (leave or ticket) to execute; a clear "no" discards it.
   2. Deterministic guards: manipulation, bulk data, personal data -> refuse.
   3. The LLM interpreter turns the message into a plan (no corpus text in that call). Its
-     category is the routing decision.
-  4. The plan is handed to a specialist agent:
+     category is the routing decision (a conditional edge).
+  4. The plan is handed to a specialist agent node:
        hr_question               -> PolicyAgent (documents, citations)
        leave_data                -> LeaveAgent reads, plus PolicyAgent when rules are needed (hybrid)
        leave_action              -> LeaveAgent proposal
        ticket                    -> TicketAgent (support tickets)
      Agents run code: permission pre-checks, tools, retrieval, precedence, composition.
-The LLM never chooses who the requester is, and never executes a tool by itself.
+  5. Every path ends in route_contract (Section 8.1 invariants).
+The LLM never chooses who the requester is, and never executes a tool by itself: graph edges are
+decided by code reading the plan, not by the model calling tools.
+
+Persistence stays outside the graph, in ``Orchestrator.handle``: the turn and any proposal are
+stored in one SQLite transaction after the response is built, so no LangGraph checkpointer is used.
 """
 from __future__ import annotations
 
@@ -20,7 +40,9 @@ import logging
 import sqlite3
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional, TypedDict
+
+from langgraph.graph import END, START, StateGraph
 
 from app import metrics
 from app.agents import people
@@ -44,8 +66,30 @@ from app.tools import leave_tools as tools
 log = logging.getLogger(__name__)
 
 # Kept importable from here for existing callers.
-__all__ = ["ChatResult", "Orchestrator", "Plan", "Read", "clarify", "refuse"]
+__all__ = ["ChatResult", "Orchestrator", "Plan", "Read", "TurnState", "clarify", "refuse"]
 _current_leave_thread = current_leave_thread
+
+
+class TurnState(TypedDict, total=False):
+    """Graph state for one turn. Never checkpointed, so it may hold the live connection context."""
+    ctx: Any  # tools.ToolContext
+    message: str
+    history: list[dict]
+    pending: Optional[dict]
+    deadline: float
+    request_id: str
+    plan: Plan
+    reads: list  # list[tools.ToolResult] from the leave agent, fed to the policy agent for hybrid answers
+    result: Optional[ChatResult]
+
+
+_FIXED_REPLIES = {
+    "manipulation": lambda: refuse(R.MANIPULATION),
+    "bulk_request": lambda: refuse(R.BULK),
+    "personal_data_request": lambda: refuse(R.PERSONAL),
+    "off_topic": lambda: refuse(R.OFF_TOPIC),
+    "greeting": lambda: clarify(R.GREETING),
+}
 
 
 class Orchestrator:
@@ -60,6 +104,7 @@ class Orchestrator:
         self.leave = LeaveAgent()
         self.tickets = TicketAgent()
         self._write_owner = {name: agent for agent in (self.leave, self.tickets) for name in agent.write_tools}
+        self.graph = self.build_graph()
 
     # ================================================================== entry point
     def handle(self, conn: sqlite3.Connection, requester: Employee, session_id: str, message: str,
@@ -71,15 +116,16 @@ class Orchestrator:
                                     max_age_minutes=self.settings.pending_ttl_minutes)
         ctx = tools.ToolContext(conn=conn, requester=requester, today=today, docs=self.kb.docs,
                                 holidays_by_doc=self.kb.holidays_by_doc, holiday_names=self.kb.holiday_names)
+        state: TurnState = {"ctx": ctx, "message": message, "history": history, "pending": pending,
+                            "deadline": deadline, "request_id": request_id, "reads": [], "result": None}
         try:
-            result = self._dispatch(ctx, session_id, message, history, pending, deadline, request_id)
+            result = self.graph.invoke(state)["result"]
         except LLMError:
             log.warning("llm unavailable for request", extra={"request_id": request_id})
             result = clarify(R.LLM_UNAVAILABLE)
         except Exception as exc:  # never a 500 for one bad turn; nothing is stored for it
             log.error("request failed", extra={"request_id": request_id, "error": type(exc).__name__})
             result = clarify(R.LLM_UNAVAILABLE)
-        result = _enforce_route_contract(result)
         result.answer = scrub_answer(result.answer)
         for call in result.tool_calls:
             call["args"] = {k: scrub_answer(v) if isinstance(v, str) else v for k, v in call["args"].items()}
@@ -100,62 +146,80 @@ class Orchestrator:
             "citations": [c["doc_id"] for c in result.citations], "pending": result.pending_confirmation})
         return result
 
-    # ================================================================== routing
-    def _dispatch(self, ctx, session_id, message, history, pending, deadline, request_id) -> ChatResult:
-        if pending:
-            if guards.is_confirmation(message):
-                return self._execute_pending(ctx, pending)
-            if guards.is_rejection(message):
-                return clarify(R.PROPOSAL_DISCARDED)
-            # Anything else: the proposal is already discarded; a changed request becomes a new proposal.
-        if guards.is_manipulation(message):
-            return refuse(R.MANIPULATION)
-        if guards.is_bulk_request(message):
-            return refuse(R.BULK)
-        if guards.is_personal_data_request(message):
-            return refuse(R.PERSONAL)
+    # ================================================================== graph
+    def build_graph(self):
+        g = StateGraph(TurnState)
+        g.add_node("execute_pending", self._node_execute_pending)
+        g.add_node("discard_pending", lambda s: {"result": clarify(R.PROPOSAL_DISCARDED)})
+        g.add_node("guards", self._node_guards)
+        g.add_node("interpret", self._node_interpret)
+        g.add_node("fixed_reply", self._node_fixed_reply)
+        g.add_node("ticket_agent", self._node_ticket)
+        g.add_node("leave_propose", self._node_leave_propose)
+        g.add_node("leave_read", self._node_leave_read)
+        g.add_node("leave_answer", lambda s: {"result": self.leave.answer(s["reads"])})
+        g.add_node("policy_agent", self._node_policy)
+        g.add_node("route_contract", lambda s: {"result": _enforce_route_contract(s["result"])})
 
-        plan = self._interpret(ctx, message, history, pending, deadline, request_id)
-        cat = plan.category
-        if cat == "manipulation":
-            return refuse(R.MANIPULATION)
-        if cat == "bulk_request":
-            return refuse(R.BULK)
-        if cat == "personal_data_request":
-            return refuse(R.PERSONAL)
-        if cat == "off_topic":
-            return refuse(R.OFF_TOPIC)
-        if cat == "greeting":
-            return clarify(R.GREETING)
-        if cat == "ticket":
-            return self.tickets.handle(ctx, plan, message)
-        if cat == "leave_action":
-            proposal = self.leave.propose(ctx, plan, message, history)
-            if proposal is not None:
-                return proposal
-        if cat == "leave_data" and not plan.reads and plan.needs_clarification and plan.clarification_question:
-            # Fixed wording: the interpreter's own text could echo names or IDs it inferred.
-            return clarify(R.CLARIFY_EMPLOYEE_OR_PERIOD, "leave")
-        return self._answer(ctx, plan, message, deadline, request_id)
+        g.add_conditional_edges(START, _route_pending, ["execute_pending", "discard_pending", "guards"])
+        g.add_conditional_edges("guards", _done_or("interpret"), ["route_contract", "interpret"])
+        g.add_conditional_edges("interpret", _route_plan,
+                                ["fixed_reply", "ticket_agent", "leave_propose", "leave_read", "policy_agent"])
+        g.add_conditional_edges("leave_propose", _done_or_answer, ["route_contract", "leave_read", "policy_agent"])
+        g.add_conditional_edges("leave_read", _route_after_reads, ["route_contract", "leave_answer", "policy_agent"])
+        for node in ("execute_pending", "discard_pending", "fixed_reply", "ticket_agent", "leave_answer",
+                     "policy_agent"):
+            g.add_edge(node, "route_contract")
+        g.add_edge("route_contract", END)
+        return g.compile()
 
-    def _answer(self, ctx, plan: Plan, message, deadline, request_id) -> ChatResult:
-        """Leave records, documents, or both (the leave agent's results feed the policy agent)."""
-        results: list[tools.ToolResult] = []
-        if plan.reads:
-            results, problem = self.leave.read(ctx, plan)
-            if problem is not None:
-                return problem
-        wants_docs = plan.needs_documents or plan.category == "hr_question" or not plan.reads
-        if not wants_docs:
-            return self.leave.answer(results)
-        return self.policy.answer(ctx, plan, message, results, deadline, request_id)
-
-    def _execute_pending(self, ctx, pending: dict) -> ChatResult:
-        name, args = pending["tool_name"], pending["args"]
+    # ------------------------------------------------------------------ nodes
+    def _node_execute_pending(self, s: TurnState) -> dict:
+        name, args = s["pending"]["tool_name"], s["pending"]["args"]
         agent = self._write_owner.get(name)
         if agent is None:
-            return clarify(R.PROPOSAL_DISCARDED)
-        return agent.execute(ctx, name, args)
+            return {"result": clarify(R.PROPOSAL_DISCARDED)}
+        return {"result": agent.execute(s["ctx"], name, args)}
+
+    def _node_guards(self, s: TurnState) -> dict:
+        # Anything other than yes/no to a pending proposal lands here: the proposal is already
+        # discarded, and a changed request becomes a new proposal.
+        message = s["message"]
+        if guards.is_manipulation(message):
+            return {"result": refuse(R.MANIPULATION)}
+        if guards.is_bulk_request(message):
+            return {"result": refuse(R.BULK)}
+        if guards.is_personal_data_request(message):
+            return {"result": refuse(R.PERSONAL)}
+        return {}
+
+    def _node_interpret(self, s: TurnState) -> dict:
+        return {"plan": self._interpret(s["ctx"], s["message"], s["history"], s["pending"], s["deadline"],
+                                        s["request_id"])}
+
+    def _node_fixed_reply(self, s: TurnState) -> dict:
+        reply = _FIXED_REPLIES.get(s["plan"].category)
+        if reply is not None:
+            return {"result": reply()}
+        # leave_data that names nobody / no period. Fixed wording: the interpreter's own text could
+        # echo names or IDs it inferred.
+        return {"result": clarify(R.CLARIFY_EMPLOYEE_OR_PERIOD, "leave")}
+
+    def _node_ticket(self, s: TurnState) -> dict:
+        return {"result": self.tickets.handle(s["ctx"], s["plan"], s["message"])}
+
+    def _node_leave_propose(self, s: TurnState) -> dict:
+        # None means the plan held no apply / cancel action: the turn continues as a read or a question.
+        return {"result": self.leave.propose(s["ctx"], s["plan"], s["message"], s["history"])}
+
+    def _node_leave_read(self, s: TurnState) -> dict:
+        results, problem = self.leave.read(s["ctx"], s["plan"])
+        return {"reads": results, "result": problem}
+
+    def _node_policy(self, s: TurnState) -> dict:
+        """Documents, optionally combined with the leave agent's results (a hybrid answer)."""
+        return {"result": self.policy.answer(s["ctx"], s["plan"], s["message"], s.get("reads") or [],
+                                             s["deadline"], s["request_id"])}
 
     # ================================================================== interpreter
     def _interpret(self, ctx, message, history, pending, deadline, request_id) -> Plan:
@@ -182,6 +246,53 @@ class Orchestrator:
                                 "reads": [x.tool for x in plan.reads], "action": plan.action.get("type"),
                                 "ticket": plan.ticket.get("type"), "needs_documents": plan.needs_documents})
         return plan
+
+
+# ====================================================================== edges (pure routing, no side effects)
+def _route_pending(s: TurnState) -> str:
+    if s.get("pending"):
+        if guards.is_confirmation(s["message"]):
+            return "execute_pending"
+        if guards.is_rejection(s["message"]):
+            return "discard_pending"
+    return "guards"
+
+
+def _done_or(next_node: str):
+    def route(s: TurnState) -> str:
+        return "route_contract" if s.get("result") is not None else next_node
+    return route
+
+
+def _answer_path(plan: Plan) -> str:
+    """Leave records first when the plan has reads (they may feed a hybrid answer), else documents."""
+    return "leave_read" if plan.reads else "policy_agent"
+
+
+def _route_plan(s: TurnState) -> str:
+    plan = s["plan"]
+    cat = plan.category
+    if cat in _FIXED_REPLIES:
+        return "fixed_reply"
+    if cat == "ticket":
+        return "ticket_agent"
+    if cat == "leave_action":
+        return "leave_propose"
+    if cat == "leave_data" and not plan.reads and plan.needs_clarification and plan.clarification_question:
+        return "fixed_reply"
+    return _answer_path(plan)
+
+
+def _done_or_answer(s: TurnState) -> str:
+    return "route_contract" if s.get("result") is not None else _answer_path(s["plan"])
+
+
+def _route_after_reads(s: TurnState) -> str:
+    if s.get("result") is not None:  # a refusal or clarification from the leave agent's pre-checks
+        return "route_contract"
+    plan = s["plan"]
+    wants_docs = plan.needs_documents or plan.category == "hr_question" or not plan.reads
+    return "policy_agent" if wants_docs else "leave_answer"
 
 
 # ====================================================================== helpers
