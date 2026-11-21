@@ -4,105 +4,741 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HR Assistant</title>
+<!-- Self-contained by design: the CSP for "/" allows only inline script/style and same-origin fetches
+     (/chat, /health, /tickets). Identity is sent as X-Employee-Id, so this page works in AUTH_MODE=header only. -->
 <style>
-  :root { --bg:#f6f7f9; --panel:#fff; --text:#1d2433; --muted:#667085; --line:#e3e6eb; --accent:#2f5bd3;
-          --user:#e8efff; --chip:#eef1f5; --ok:#1f7a4d; --err:#b42318; --pend:#9a6700; }
+  :root {
+    --bg:#f5f6f8; --surface:#ffffff; --surface-2:#f0f2f5; --sidebar:#0f1f2e; --sidebar-text:#c9d4df;
+    --sidebar-muted:#7f93a6; --sidebar-hover:#1a2f42; --sidebar-active:#21405a;
+    --text:#17202b; --muted:#5f6b7a; --line:#e2e6eb; --accent:#0f766e; --accent-hover:#0b5f59;
+    --accent-soft:#e3f3f1; --accent-text:#ffffff; --user:#0f766e; --user-text:#ffffff;
+    --ok:#15803d; --ok-soft:#e6f4ea; --warn:#a16207; --warn-soft:#fdf4dc; --err:#b42318; --err-soft:#fdecea;
+    --info:#1d4ed8; --info-soft:#e8effd; --shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    --radius:14px;
+  }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-    --bg:#111418; --panel:#1a1f26; --text:#e6e9ee; --muted:#98a2b3; --line:#2a313b; --accent:#7aa2ff;
-    --user:#22304d; --chip:#252c36; --ok:#4cc38a; --err:#f97066; --pend:#f5c451; } }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
-  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
-  header h1 { font-size:16px; margin:0 12px 0 0; }
-  label { font-size:13px; color:var(--muted); display:flex; gap:6px; align-items:center; }
-  input, button { font:inherit; color:inherit; }
-  input { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
-  #emp { width:110px; }
-  button { border:1px solid var(--line); background:var(--panel); border-radius:8px; padding:6px 12px; cursor:pointer; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  #health { font-size:12px; padding:2px 8px; border-radius:999px; background:var(--chip); }
-  main { max-width:900px; margin:0 auto; padding:16px; display:flex; flex-direction:column; gap:12px; min-height:calc(100vh - 140px); }
-  .msg { padding:10px 14px; border-radius:12px; background:var(--panel); border:1px solid var(--line); max-width:85%; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .msg.user { align-self:flex-end; background:var(--user); }
-  .meta { margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; font-size:12px; }
-  .chip { background:var(--chip); border-radius:6px; padding:2px 8px; }
-  .route { font-weight:600; }
-  .success { color:var(--ok); } .error { color:var(--err); } .pending_confirmation { color:var(--pend); }
-  .sys { align-self:center; color:var(--muted); font-size:13px; }
-  form { position:sticky; bottom:0; background:var(--bg); padding:12px 16px; border-top:1px solid var(--line); display:flex; gap:8px; max-width:900px; margin:0 auto; }
-  #text { flex:1; min-width:0; }
-  .examples { display:flex; flex-wrap:wrap; gap:6px; }
-  .examples button { font-size:12px; padding:3px 8px; }
+    --bg:#0e1319; --surface:#161d25; --surface-2:#1d2630; --sidebar:#0a1016; --sidebar-text:#c9d4df;
+    --sidebar-muted:#74879a; --sidebar-hover:#141e28; --sidebar-active:#1b3142;
+    --text:#e6ebf0; --muted:#97a3b0; --line:#28323d; --accent:#2dd4bf; --accent-hover:#5eead4;
+    --accent-soft:#12302d; --accent-text:#05201d; --user:#1f5f59; --user-text:#eafffb;
+    --ok:#4ade80; --ok-soft:#13291c; --warn:#facc15; --warn-soft:#2d2610; --err:#f87171; --err-soft:#341a1a;
+    --info:#93b4ff; --info-soft:#182540; --shadow:0 1px 2px rgba(0,0,0,.4);
+  } }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  button { cursor:pointer; }
+  svg { flex:none; }
+  .app { display:grid; grid-template-columns:268px 1fr; height:100vh; height:100dvh; }
+
+  /* ---------- sidebar ---------- */
+  .sidebar { background:var(--sidebar); color:var(--sidebar-text); display:flex; flex-direction:column; padding:18px 14px; gap:18px; min-height:0; }
+  .brand { display:flex; align-items:center; gap:10px; padding:2px 6px; }
+  .brand-mark { width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg,#14b8a6,#0f766e); display:grid; place-items:center; color:#fff; }
+  .brand b { display:block; color:#fff; font-size:15px; letter-spacing:.2px; }
+  .brand span { display:block; font-size:12px; color:var(--sidebar-muted); }
+  .new-chat { display:flex; align-items:center; justify-content:center; gap:8px; border:1px solid #2b4256; background:transparent; color:#fff;
+              border-radius:10px; padding:9px 12px; font-weight:600; font-size:14px; }
+  .new-chat:hover { background:var(--sidebar-hover); }
+  nav { display:flex; flex-direction:column; gap:2px; }
+  .nav-label { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--sidebar-muted); padding:0 10px 6px; }
+  .nav-item { display:flex; align-items:center; gap:10px; border:0; background:transparent; color:var(--sidebar-text); text-align:left;
+              padding:9px 10px; border-radius:9px; font-size:14px; width:100%; }
+  .nav-item:hover { background:var(--sidebar-hover); }
+  .nav-item[aria-current="page"] { background:var(--sidebar-active); color:#fff; }
+  .nav-item .count { margin-left:auto; font-size:11px; background:#2b4256; border-radius:999px; padding:1px 7px; color:#fff; }
+  .side-help { margin-top:auto; font-size:12px; color:var(--sidebar-muted); padding:0 8px; line-height:1.5; }
+  .profile { border-top:1px solid #20344a; padding-top:14px; display:flex; flex-direction:column; gap:10px; }
+  .who { display:flex; align-items:center; gap:10px; padding:0 4px; }
+  .avatar { width:38px; height:38px; border-radius:50%; display:grid; place-items:center; font-weight:700; font-size:14px; color:#fff; flex:none; }
+  .who b { display:block; color:#fff; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .who span { display:block; font-size:12px; color:var(--sidebar-muted); }
+  .switch { display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--sidebar-muted); padding:0 4px; }
+  .switch select, .switch input { background:var(--sidebar-hover); border:1px solid #2b4256; color:var(--sidebar-text); border-radius:8px; padding:6px 8px; font-size:13px; width:100%; }
+
+  /* ---------- main ---------- */
+  .main { display:flex; flex-direction:column; min-width:0; min-height:0; }
+  .topbar { display:flex; align-items:center; gap:12px; padding:12px 24px; border-bottom:1px solid var(--line); background:var(--surface); }
+  .topbar h1 { font-size:16px; margin:0; font-weight:650; }
+  .topbar .sub { font-size:13px; color:var(--muted); }
+  .menu-btn { display:none; border:0; background:transparent; padding:4px; border-radius:8px; }
+  .status { margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--warn); }
+  .dot.ok { background:var(--ok); } .dot.err { background:var(--err); }
+  .icon-btn { border:1px solid var(--line); background:var(--surface); border-radius:8px; padding:5px 9px; font-size:12px; color:var(--muted); display:flex; gap:6px; align-items:center; }
+  .icon-btn:hover { color:var(--text); }
+  .icon-btn[aria-pressed="true"] { color:var(--accent); border-color:var(--accent); }
+  .view { flex:1; min-height:0; display:none; flex-direction:column; }
+  .view.active { display:flex; }
+
+  /* ---------- chat ---------- */
+  .scroll { flex:1; overflow-y:auto; }
+  .thread { max-width:820px; margin:0 auto; padding:28px 24px 12px; display:flex; flex-direction:column; gap:18px; }
+  .welcome { text-align:left; padding:24px 0 8px; }
+  .welcome h2 { font-size:28px; margin:0 0 4px; font-weight:700; letter-spacing:-.3px; }
+  .welcome p { margin:0 0 22px; color:var(--muted); font-size:16px; }
+  .actions { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px; }
+  .action { display:flex; gap:12px; align-items:flex-start; text-align:left; background:var(--surface); border:1px solid var(--line);
+            border-radius:12px; padding:14px; box-shadow:var(--shadow); transition:border-color .15s, transform .15s; }
+  .action:hover { border-color:var(--accent); transform:translateY(-1px); }
+  .action .ic { width:34px; height:34px; border-radius:9px; background:var(--accent-soft); color:var(--accent); display:grid; place-items:center; }
+  .action b { display:block; font-size:14px; font-weight:600; }
+  .action span { display:block; font-size:12.5px; color:var(--muted); margin-top:1px; }
+  .row { display:flex; gap:10px; align-items:flex-start; }
+  .row.user { justify-content:flex-end; }
+  .bot-avatar { width:30px; height:30px; border-radius:9px; background:linear-gradient(135deg,#14b8a6,#0f766e); color:#fff; display:grid; place-items:center; margin-top:2px; }
+  .bubble { max-width:min(640px, 86%); overflow-wrap:anywhere; }
+  .row.user .bubble { background:var(--user); color:var(--user-text); padding:9px 14px; border-radius:16px 16px 4px 16px; white-space:pre-wrap; }
+  .row.bot .bubble { background:var(--surface); border:1px solid var(--line); padding:12px 16px; border-radius:4px 16px 16px 16px; box-shadow:var(--shadow); }
+  .bubble p { margin:0 0 8px; } .bubble p:last-child { margin-bottom:0; }
+  .bubble ul, .bubble ol { margin:4px 0 8px; padding-left:20px; }
+  .bubble code { background:var(--surface-2); padding:1px 5px; border-radius:5px; font-size:13px; }
+  .bubble.error { border-color:var(--err); background:var(--err-soft); }
+  .note { align-self:center; font-size:12.5px; color:var(--muted); background:var(--surface-2); border-radius:999px; padding:4px 12px; }
+  .typing { display:flex; gap:4px; padding:4px 2px; }
+  .typing i { width:7px; height:7px; border-radius:50%; background:var(--muted); opacity:.4; animation:blink 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay:.2s; } .typing i:nth-child(3) { animation-delay:.4s; }
+  @keyframes blink { 0%,80%,100% { opacity:.25; } 40% { opacity:.9; } }
+  @media (prefers-reduced-motion: reduce) { .typing i { animation:none; } .action { transition:none; } }
+  .sources { margin-top:12px; padding-top:10px; border-top:1px dashed var(--line); }
+  .sources-label { font-size:11px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); margin-bottom:6px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { display:inline-flex; align-items:center; gap:5px; font-size:12px; background:var(--surface-2); border:1px solid var(--line); border-radius:7px; padding:2px 8px; }
+  .done { margin-top:10px; display:flex; flex-direction:column; gap:6px; }
+  .done-item { display:flex; align-items:center; gap:8px; font-size:13px; padding:6px 10px; border-radius:8px; }
+  .done-item.success { background:var(--ok-soft); color:var(--ok); }
+  .done-item.error { background:var(--err-soft); color:var(--err); }
+  .confirm { margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .btn { border:1px solid var(--line); background:var(--surface); border-radius:9px; padding:7px 14px; font-size:14px; font-weight:550; }
+  .btn:hover:not(:disabled) { background:var(--surface-2); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-text); }
+  .btn.primary:hover:not(:disabled) { background:var(--accent-hover); }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .btn.sm { padding:4px 10px; font-size:13px; }
+  .tech { margin-top:10px; font-size:12px; color:var(--muted); display:none; }
+  .show-tech .tech { display:block; }
+  .tech summary { cursor:pointer; }
+  .tech pre { white-space:pre-wrap; background:var(--surface-2); border-radius:8px; padding:8px; margin:6px 0 0; font-size:11.5px; }
+  .composer-wrap { padding:10px 24px 16px; background:linear-gradient(to bottom, transparent, var(--bg) 30%); }
+  .composer { max-width:820px; margin:0 auto; display:flex; align-items:flex-end; gap:8px; background:var(--surface); border:1px solid var(--line);
+              border-radius:16px; padding:8px 8px 8px 16px; box-shadow:var(--shadow); }
+  .composer:focus-within { border-color:var(--accent); }
+  .composer textarea { flex:1; border:0; outline:0; background:transparent; resize:none; max-height:180px; padding:7px 0; line-height:1.45; min-width:0; }
+  .send { width:38px; height:38px; border-radius:11px; border:0; background:var(--accent); color:var(--accent-text); display:grid; place-items:center; }
+  .send:disabled { opacity:.4; cursor:default; }
+  .disclaimer { max-width:820px; margin:8px auto 0; text-align:center; font-size:11.5px; color:var(--muted); }
+
+  /* ---------- tickets ---------- */
+  .tickets { max-width:980px; width:100%; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+  .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+  .toolbar .seg { margin-right:auto; }
+  .seg { display:inline-flex; background:var(--surface-2); border-radius:9px; padding:3px; gap:2px; flex-wrap:wrap; }
+  .seg button { border:0; background:transparent; border-radius:7px; padding:5px 11px; font-size:13px; color:var(--muted); }
+  .seg button[aria-pressed="true"] { background:var(--surface); color:var(--text); box-shadow:var(--shadow); }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); }
+  .tlist { display:flex; flex-direction:column; }
+  .titem { display:grid; grid-template-columns:auto 1fr auto; gap:4px 14px; align-items:center; padding:14px 18px; border:0; border-bottom:1px solid var(--line);
+           background:transparent; text-align:left; width:100%; }
+  .titem:last-child { border-bottom:0; }
+  .titem:hover { background:var(--surface-2); }
+  .titem .tid { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .titem .subj { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .titem .tmeta { grid-column:2 / 4; font-size:12.5px; color:var(--muted); }
+  .badge { display:inline-block; font-size:11.5px; font-weight:600; border-radius:999px; padding:2px 9px; text-transform:capitalize; white-space:nowrap; }
+  .b-open { background:var(--info-soft); color:var(--info); }
+  .b-in_progress { background:var(--warn-soft); color:var(--warn); }
+  .b-resolved { background:var(--ok-soft); color:var(--ok); }
+  .b-closed { background:var(--surface-2); color:var(--muted); }
+  .p-high, .p-urgent { color:var(--err); font-weight:600; }
+  .empty { padding:44px 20px; text-align:center; color:var(--muted); }
+  .empty b { display:block; color:var(--text); font-size:15px; margin-bottom:4px; }
+  .form { padding:20px; display:grid; gap:14px; grid-template-columns:1fr 1fr; }
+  .form .full { grid-column:1 / -1; }
+  .field { display:flex; flex-direction:column; gap:5px; font-size:13px; font-weight:550; }
+  .field input, .field select, .field textarea { background:var(--surface); border:1px solid var(--line); border-radius:9px; padding:8px 11px; font-weight:400; font-size:14px; }
+  .field textarea { min-height:110px; resize:vertical; }
+  .field input:focus, .field select:focus, .field textarea:focus { outline:2px solid var(--accent-soft); border-color:var(--accent); }
+  .form-actions { grid-column:1 / -1; display:flex; justify-content:flex-end; gap:8px; }
+  .msg-inline { font-size:13px; padding:8px 12px; border-radius:8px; }
+  .msg-inline.error { background:var(--err-soft); color:var(--err); }
+  .msg-inline.success { background:var(--ok-soft); color:var(--ok); }
+  .detail { padding:20px 22px; display:flex; flex-direction:column; gap:16px; }
+  .detail h3 { margin:0; font-size:18px; }
+  .kv { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:13px; color:var(--muted); }
+  .kv b { color:var(--text); font-weight:550; }
+  .desc { white-space:pre-wrap; background:var(--surface-2); border-radius:10px; padding:12px 14px; font-size:14px; }
+  .timeline { display:flex; flex-direction:column; gap:12px; border-left:2px solid var(--line); margin-left:6px; padding-left:16px; }
+  .ev { position:relative; font-size:13.5px; }
+  .ev::before { content:""; position:absolute; left:-22px; top:5px; width:10px; height:10px; border-radius:50%; background:var(--surface); border:2px solid var(--accent); }
+  .ev .when { font-size:12px; color:var(--muted); }
+  .ev .body { white-space:pre-wrap; margin-top:2px; }
+  .back { border:0; background:transparent; color:var(--accent); padding:0; font-weight:600; font-size:13px; display:inline-flex; gap:4px; align-items:center; align-self:flex-start; }
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  /* ---------- mobile ---------- */
+  .scrim { display:none; }
+  @media (max-width: 860px) {
+    .app { grid-template-columns:1fr; }
+    .sidebar { position:fixed; inset:0 auto 0 0; width:280px; z-index:20; transform:translateX(-100%); transition:transform .2s; }
+    .app.nav-open .sidebar { transform:none; }
+    .app.nav-open .scrim { display:block; position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:10; }
+    .menu-btn { display:grid; place-items:center; }
+    .topbar { padding:10px 16px; }
+    .topbar .sub { display:none; }
+    .thread { padding:18px 16px 8px; }
+    .composer-wrap { padding:8px 16px 12px; }
+    .tickets { padding:16px; }
+    .welcome h2 { font-size:23px; }
+    .form { grid-template-columns:1fr; }
+    .titem { grid-template-columns:1fr auto; }
+    .titem .tid { grid-column:1 / -1; }
+    .titem .tmeta { grid-column:1 / -1; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>HR Assistant</h1>
-  <label>Employee ID <input id="emp" value="E2004" autocomplete="off"></label>
-  <label>Session <input id="sess" readonly size="14"></label>
-  <button id="newSess" type="button">New session</button>
-  <span id="health">checking…</span>
-</header>
-<main id="log">
-  <div class="sys">Try: E2004 (employee, IN) · E4004 (employee, DE) · E2002 (manager) · E1001 (HR)</div>
-  <div class="examples sys" id="examples"></div>
-</main>
-<form id="form">
-  <input id="text" placeholder="Ask about HR policies or your leave…" autocomplete="off">
-  <button class="primary" type="submit">Send</button>
-</form>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar" aria-label="Navigation">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <div><b>HR Assistant</b><span>Employee help desk</span></div>
+    </div>
+    <button class="new-chat" id="newChat" type="button">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      New conversation
+    </button>
+    <nav>
+      <div class="nav-label">Workspace</div>
+      <button class="nav-item" data-view="chat" aria-current="page" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg>
+        Ask HR
+      </button>
+      <button class="nav-item" data-view="tickets" data-scope="mine" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 5v12" stroke-dasharray="2 2"/></svg>
+        My requests <span class="count" id="mineCount" hidden></span>
+      </button>
+      <button class="nav-item" data-view="tickets" data-scope="queue" id="navQueue" type="button" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        HR queue
+      </button>
+      <button class="nav-item" data-view="tickets" data-scope="assigned" id="navAssigned" type="button" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+        Assigned to me
+      </button>
+    </nav>
+    <div class="side-help">Answers come from your company's HR policies and your own records. For anything sensitive, raise a private request with HR.</div>
+    <div class="profile">
+      <div class="who">
+        <div class="avatar" id="avatar" aria-hidden="true">?</div>
+        <div style="min-width:0"><b id="whoName">Loading…</b><span id="whoRole"></span></div>
+      </div>
+      <label class="switch">Signed in as (demo)
+        <select id="personSel"></select>
+      </label>
+      <label class="switch" id="otherWrap" hidden>Employee ID
+        <input id="otherId" placeholder="e.g. E2005" autocomplete="off" spellcheck="false">
+      </label>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="menu-btn" id="menuBtn" type="button" aria-label="Open navigation">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <div><h1 id="viewTitle">Ask HR</h1><div class="sub" id="viewSub">Leave, holidays, policies and HR requests in one place</div></div>
+      <div class="status" role="status"><span class="dot" id="dot"></span><span id="statusText">Connecting…</span></div>
+      <button class="icon-btn" id="techBtn" type="button" aria-pressed="false" title="Show routing and tool details under each answer">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l-3 3 3 3M16 9l3 3-3 3"/></svg>
+        Details
+      </button>
+    </header>
+
+    <!-- ===== chat view ===== -->
+    <section class="view active" id="view-chat" aria-label="Chat">
+      <div class="scroll" id="scroll">
+        <div class="thread" id="thread" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <h2 id="greeting">Hello</h2>
+            <p>I'm your HR assistant. Ask about leave, holidays and policies, or raise a request with the HR team.</p>
+            <div class="actions" id="actions"></div>
+          </div>
+        </div>
+      </div>
+      <div class="composer-wrap">
+        <form class="composer" id="form">
+          <label class="sr" for="text">Message</label>
+          <textarea id="text" rows="1" placeholder="Ask about leave, holidays or HR policies…" autocomplete="off"></textarea>
+          <button class="send" id="sendBtn" type="submit" aria-label="Send" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </form>
+        <div class="disclaimer">The assistant can make mistakes. Check important details against the cited policy, or contact HR.</div>
+      </div>
+    </section>
+
+    <!-- ===== tickets view ===== -->
+    <section class="view" id="view-tickets" aria-label="Requests">
+      <div class="scroll"><div class="tickets" id="ticketsRoot"></div></div>
+    </section>
+  </div>
+</div>
+
 <script>
+"use strict";
 const $ = (id) => document.getElementById(id);
-const log = $("log");
-const examples = ["How many sick days do I get?", "What's my leave balance?", "Apply annual leave from 16 to 18 November",
-  "yes", "Who in my team is on leave in November?", "What is the deadline for expense claims?", "When is Diwali this year?"];
-for (const e of examples) {
-  const b = document.createElement("button"); b.type = "button"; b.textContent = e;
-  b.onclick = () => { $("text").value = e; $("form").requestSubmit(); };
-  $("examples").appendChild(b);
-}
-function newSession() { $("sess").value = "ui-" + crypto.randomUUID().slice(0, 8); }
-newSession();
-$("newSess").onclick = () => { newSession(); add("sys", "New session started."); };
-$("emp").onchange = () => { newSession(); add("sys", "Employee changed: new session started."); };
 
-function add(kind, text) {
-  const d = document.createElement("div"); d.className = kind === "sys" ? "sys" : "msg " + kind;
-  d.textContent = text; log.appendChild(d); d.scrollIntoView({ block: "end" }); return d;
-}
-function chip(parent, text, cls) {
-  const c = document.createElement("span"); c.className = "chip " + (cls || ""); c.textContent = text; parent.appendChild(c);
-}
+// Demo sign-in. Identity, role and region are always resolved by the server from veltrix.db.
+const PEOPLE = [
+  { id: "E2004", name: "Sneha Kulkarni", role: "employee", region: "IN" },
+  { id: "E2002", name: "Divya Menon", role: "manager", region: "IN" },
+  { id: "E1001", name: "Meera Krishnan", role: "hr", region: "IN" },
+  { id: "E3004", name: "Emily Carter", role: "employee", region: "US" },
+  { id: "E4004", name: "Lena Hoffmann", role: "employee", region: "DE" },
+];
+const ROLE_LABEL = { employee: "Employee", manager: "People manager", hr: "HR team" };
+const REGION_LABEL = { IN: "India", US: "United States", DE: "Germany" };
+const CATEGORIES = { leave: "Leave", payroll: "Payroll", benefits: "Benefits", policy: "Policy question",
+  documents: "Documents & letters", workplace: "Workplace", it_access: "IT access", other: "Other" };
+const PRIORITIES = ["low", "normal", "high", "urgent"];
+const TOOL_DONE = { apply_leave: "Leave request submitted", cancel_leave: "Leave request cancelled",
+  create_ticket: "HR request created", comment_ticket: "Comment added", update_ticket_status: "Request status updated" };
+const TOOL_LOOKUP = { get_leave_balance: "Checked leave balance", list_leave_requests: "Looked up leave requests",
+  get_team_leave: "Checked team calendar", list_tickets: "Looked up HR requests", get_ticket: "Opened HR request" };
+const ICONS = {
+  balance: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  plane: '<path d="M3 11l18-7-7 18-2-8z"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5"/>',
+  receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.7M12 17h.01"/>',
+  team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"/>',
+  inbox: '<path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 3h6l1-3h5"/>',
+  doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+};
+const icon = (name, size = 18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 
-$("form").onsubmit = async (ev) => {
-  ev.preventDefault();
-  const text = $("text").value.trim(); if (!text) return;
-  $("text").value = "";
-  add("user", text);
-  const pending = add("bot", "…");
-  const started = performance.now();
-  try {
-    const r = await fetch("/chat", { method: "POST",
-      headers: { "Content-Type": "application/json", "X-Employee-Id": $("emp").value.trim() },
-      body: JSON.stringify({ session_id: $("sess").value, message: text }) });
-    const body = await r.json();
-    if (!r.ok) { pending.textContent = `HTTP ${r.status}: ${body.detail || JSON.stringify(body)}`; pending.classList.add("error"); return; }
-    pending.textContent = body.answer;
-    const meta = document.createElement("div"); meta.className = "meta";
-    chip(meta, "route: " + body.route, "route");
-    chip(meta, ((performance.now() - started) / 1000).toFixed(1) + " s");
-    for (const c of body.citations) chip(meta, `📄 ${c.doc_id} · ${c.locator}`);
-    for (const t of body.tool_calls) chip(meta, `🔧 ${t.name}(${JSON.stringify(t.args)}) → ${t.status}`, t.status);
-    if (body.pending_confirmation) chip(meta, "awaiting confirmation: reply \"yes\"", "pending_confirmation");
-    pending.appendChild(meta);
-  } catch (e) { pending.textContent = "Request failed: " + e; pending.classList.add("error"); }
+const state = { empId: "E2004", person: PEOPLE[0], session: "", busy: false, ticketScope: "mine", ticketStatus: "", lastText: "" };
+
+// ---------- storage (best effort) ----------
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
 };
 
-async function health() {
-  try { const r = await fetch("/health"); $("health").textContent = r.ok ? "ready" : "starting…"; if (!r.ok) setTimeout(health, 2000); }
-  catch { $("health").textContent = "offline"; setTimeout(health, 3000); }
+// ---------- helpers ----------
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function initials(name) { return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "?"; }
+function hue(id) { let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function headers(json) { const h = { "X-Employee-Id": state.empId }; if (json) h["Content-Type"] = "application/json"; return h; }
+function fmtDate(s) {
+  if (!s) return "";
+  const d = new Date(s.length <= 10 ? s + "T00:00:00" : s);
+  if (isNaN(d)) return s;
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) +
+    (s.length > 10 ? " · " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "");
 }
+function nameOf(id) { const p = PEOPLE.find((x) => x.id === id); return p ? p.name : id; }
+function label(s) { return String(s || "").replace(/_/g, " "); }
+
+// Minimal, safe Markdown: escape first, then add a few tags.
+function md(text) {
+  const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/(^|[\s(])\*(?!\s)([^*]+?)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>");
+  const out = []; let list = null;
+  const close = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  let para = [];
+  const flush = () => { if (para.length) { out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; } };
+  for (const raw of esc(text).split("\n")) {
+    const line = raw.trimEnd();
+    const ul = line.match(/^\s*[-*•]\s+(.*)$/), ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (ul || ol) {
+      flush(); const kind = ul ? "ul" : "ol";
+      if (list !== kind) { close(); out.push(`<${kind}>`); list = kind; }
+      out.push("<li>" + inline((ul || ol)[1]) + "</li>");
+    } else if (!line.trim()) { flush(); close(); }
+    else { close(); para.push(line); }
+  }
+  flush(); close();
+  return out.join("");
+}
+
+// ---------- identity ----------
+function setupPeople() {
+  const sel = $("personSel");
+  for (const p of PEOPLE) {
+    const o = document.createElement("option"); o.value = p.id;
+    o.textContent = `${p.name} · ${ROLE_LABEL[p.role]} · ${p.region}`; sel.appendChild(o);
+  }
+  const other = document.createElement("option"); other.value = "__other"; other.textContent = "Another employee ID…"; sel.appendChild(other);
+  const saved = store.get("hr.emp");
+  if (saved && PEOPLE.some((p) => p.id === saved)) sel.value = saved;
+  else if (saved) { sel.value = "__other"; $("otherWrap").hidden = false; $("otherId").value = saved; }
+  sel.onchange = () => {
+    if (sel.value === "__other") { $("otherWrap").hidden = false; $("otherId").focus(); return; }
+    $("otherWrap").hidden = true; switchTo(sel.value);
+  };
+  $("otherId").onchange = () => { const v = $("otherId").value.trim().toUpperCase(); if (v) switchTo(v); };
+  switchTo(sel.value === "__other" ? ($("otherId").value.trim().toUpperCase() || "E2004") : sel.value, true);
+}
+
+function switchTo(id, initial) {
+  state.empId = id; store.set("hr.emp", id);
+  const p = PEOPLE.find((x) => x.id === id);
+  state.person = p || { id, name: `Employee ${id}`, role: "employee", region: "" };
+  $("whoName").textContent = state.person.name;
+  $("whoRole").textContent = p ? `${ROLE_LABEL[p.role]} · ${REGION_LABEL[p.region] || p.region}` : id;
+  $("avatar").textContent = p ? initials(p.name) : id.slice(0, 2);
+  $("avatar").style.background = `hsl(${hue(id)} 45% 42%)`;
+  const isHr = p ? p.role === "hr" : false;
+  $("navQueue").hidden = !isHr; $("navAssigned").hidden = !isHr;
+  resetChat();
+  refreshMineCount();
+  if (!initial && $("view-tickets").classList.contains("active")) {
+    if (!isHr && state.ticketScope !== "mine") state.ticketScope = "mine";
+    showView("tickets", state.ticketScope);
+  }
+}
+
+// ---------- views ----------
+function showView(name, scope) {
+  for (const v of document.querySelectorAll(".view")) v.classList.toggle("active", v.id === "view-" + name);
+  for (const b of document.querySelectorAll(".nav-item")) {
+    const on = b.dataset.view === name && (name !== "tickets" || b.dataset.scope === scope);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  }
+  $("app").classList.remove("nav-open");
+  if (name === "chat") {
+    $("viewTitle").textContent = "Ask HR"; $("viewSub").textContent = "Leave, holidays, policies and HR requests in one place";
+    $("text").focus();
+  } else {
+    state.ticketScope = scope || "mine";
+    const t = { mine: ["My requests", "Track what you've raised with HR"], queue: ["HR queue", "Every open request across the company"],
+                assigned: ["Assigned to me", "Requests you're working on"] }[state.ticketScope];
+    $("viewTitle").textContent = t[0]; $("viewSub").textContent = t[1];
+    renderTicketList();
+  }
+}
+for (const b of document.querySelectorAll(".nav-item")) b.onclick = () => showView(b.dataset.view, b.dataset.scope);
+$("menuBtn").onclick = () => $("app").classList.add("nav-open");
+$("scrim").onclick = () => $("app").classList.remove("nav-open");
+
+// ---------- chat ----------
+function quickActions() {
+  const a = [
+    { ic: "balance", t: "Leave balance", d: "See how many days you have left", send: "What's my leave balance?" },
+    { ic: "plane", t: "Request time off", d: "Book annual or sick leave", fill: "I'd like to apply for annual leave from " },
+    { ic: "calendar", t: "Public holidays", d: "Upcoming holidays in your region", send: "What are the upcoming public holidays for my region?" },
+    { ic: "book", t: "Sick leave policy", d: "How many sick days you get", send: "How many sick days do I get?" },
+    { ic: "receipt", t: "Expense claims", d: "Deadlines and how to claim", send: "What is the deadline for expense claims?" },
+    { ic: "help", t: "Raise an HR request", d: "Get help from the HR team", fill: "I'd like to raise an HR ticket about " },
+  ];
+  if (state.person.role === "manager") a.splice(2, 0, { ic: "team", t: "Team availability", d: "Who on your team is away", send: "Who in my team is on leave this month?" });
+  if (state.person.role === "hr") a.splice(2, 0, { ic: "inbox", t: "Open HR requests", d: "Review the HR queue", send: "Show the open tickets in the HR queue" });
+  return a;
+}
+
+function renderWelcome() {
+  const h = new Date().getHours();
+  const part = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  const first = state.person.name.startsWith("Employee ") ? "" : ", " + state.person.name.split(" ")[0];
+  $("greeting").textContent = `${part}${first}`;
+  const box = $("actions"); box.innerHTML = "";
+  for (const q of quickActions()) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "action";
+    b.innerHTML = `<div class="ic">${icon(q.ic)}</div><div><b>${esc(q.t)}</b><span>${esc(q.d)}</span></div>`;
+    b.onclick = () => {
+      if (q.send) send(q.send);
+      else { const t = $("text"); t.value = q.fill; autosize(); t.focus(); t.setSelectionRange(t.value.length, t.value.length); updateSend(); }
+    };
+    box.appendChild(b);
+  }
+}
+
+function resetChat() {
+  state.session = "web-" + crypto.randomUUID().slice(0, 12);
+  const thread = $("thread");
+  for (const n of [...thread.children]) if (n.id !== "welcome") n.remove();
+  $("welcome").hidden = false;
+  renderWelcome();
+}
+$("newChat").onclick = () => { resetChat(); showView("chat"); };
+
+function addRow(kind) {
+  $("welcome").hidden = true;
+  const row = document.createElement("div"); row.className = "row " + kind;
+  if (kind === "bot") row.innerHTML = `<div class="bot-avatar" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>`;
+  const bubble = document.createElement("div"); bubble.className = "bubble"; row.appendChild(bubble);
+  $("thread").appendChild(row);
+  requestAnimationFrame(() => { $("scroll").scrollTop = $("scroll").scrollHeight; });
+  return bubble;
+}
+function addNote(text) {
+  const n = document.createElement("div"); n.className = "note"; n.textContent = text; $("thread").appendChild(n);
+}
+
+function renderAnswer(bubble, body, ms) {
+  bubble.innerHTML = md(body.answer || "");
+  const done = (body.tool_calls || []).filter((t) => TOOL_DONE[t.name] && t.status !== "pending_confirmation");
+  if (done.length) {
+    const box = document.createElement("div"); box.className = "done";
+    for (const t of done) {
+      const ok = t.status === "success";
+      box.insertAdjacentHTML("beforeend", `<div class="done-item ${ok ? "success" : "error"}">${icon(ok ? "check" : "x", 15)}${esc(ok ? TOOL_DONE[t.name] : "Couldn't complete: " + label(t.name))}</div>`);
+    }
+    bubble.appendChild(box);
+  }
+  if (body.citations && body.citations.length) {
+    const src = document.createElement("div"); src.className = "sources";
+    src.innerHTML = `<div class="sources-label">Sources</div><div class="chips"></div>`;
+    const seen = new Set();
+    for (const c of body.citations) {
+      const key = c.doc_id + "|" + c.locator; if (seen.has(key)) continue; seen.add(key);
+      src.lastChild.insertAdjacentHTML("beforeend", `<span class="chip" title="${esc(c.doc_id)}">${icon("doc", 13)}${esc(c.doc_id)}${c.locator ? " · " + esc(c.locator) : ""}</span>`);
+    }
+    bubble.appendChild(src);
+  }
+  if (body.pending_confirmation) {
+    const c = document.createElement("div"); c.className = "confirm";
+    const yes = document.createElement("button"); yes.type = "button"; yes.className = "btn primary sm"; yes.textContent = "Confirm";
+    const no = document.createElement("button"); no.type = "button"; no.className = "btn sm"; no.textContent = "Cancel";
+    const pick = (msg) => { yes.disabled = no.disabled = true; send(msg); };
+    yes.onclick = () => pick("yes"); no.onclick = () => pick("no");
+    c.append(yes, no); bubble.appendChild(c);
+  }
+  const tech = document.createElement("details"); tech.className = "tech";
+  const lookups = (body.tool_calls || []).filter((t) => TOOL_LOOKUP[t.name]).map((t) => TOOL_LOOKUP[t.name]);
+  tech.innerHTML = `<summary>Route: ${esc(body.route)} · ${(ms / 1000).toFixed(1)} s${lookups.length ? " · " + esc(lookups.join(", ")) : ""}</summary>` +
+    `<pre>${esc(JSON.stringify({ request_id: body.request_id, route: body.route, tool_calls: body.tool_calls, citations: body.citations }, null, 2))}</pre>`;
+  bubble.appendChild(tech);
+}
+
+function renderError(bubble, message, retryText) {
+  bubble.classList.add("error");
+  bubble.innerHTML = `<p>${esc(message)}</p>`;
+  if (retryText) {
+    const c = document.createElement("div"); c.className = "confirm";
+    const b = document.createElement("button"); b.type = "button"; b.className = "btn sm"; b.textContent = "Try again";
+    b.onclick = () => { b.disabled = true; send(retryText); };
+    c.appendChild(b); bubble.appendChild(c);
+  }
+}
+
+async function send(text) {
+  text = (text || "").trim();
+  if (!text || state.busy) return;
+  state.busy = true; updateSend();
+  addRow("user").textContent = text;
+  const bubble = addRow("bot");
+  bubble.innerHTML = `<div class="typing" aria-label="Assistant is typing"><i></i><i></i><i></i></div>`;
+  const started = performance.now();
+  const session = state.session;
+  try {
+    const r = await fetch("/chat", { method: "POST", headers: headers(true), body: JSON.stringify({ session_id: session, message: text }) });
+    let body = {}; try { body = await r.json(); } catch { /* non-JSON error */ }
+    if (session !== state.session) return;
+    if (!r.ok) {
+      const msg = r.status === 401 ? "We couldn't find that employee. Check the employee ID and try again."
+        : r.status === 429 ? "You're sending messages a little fast. Please wait a moment and try again."
+        : r.status === 503 ? "The assistant is still starting up. Please try again in a few seconds."
+        : `Something went wrong (${r.status}). ${body.detail || ""}`;
+      renderError(bubble, msg, r.status === 401 ? null : text);
+    } else {
+      renderAnswer(bubble, body, performance.now() - started);
+      if ((body.tool_calls || []).some((t) => /ticket/.test(t.name) && t.status === "success")) refreshMineCount();
+    }
+  } catch {
+    if (session === state.session) renderError(bubble, "Can't reach the HR Assistant. Check your connection and try again.", text);
+  } finally {
+    state.busy = false; updateSend();
+    requestAnimationFrame(() => { $("scroll").scrollTop = $("scroll").scrollHeight; });
+  }
+}
+
+const ta = $("text");
+function autosize() { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; }
+function updateSend() { $("sendBtn").disabled = state.busy || !ta.value.trim(); }
+ta.addEventListener("input", () => { autosize(); updateSend(); });
+ta.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("form").requestSubmit(); }
+});
+$("form").onsubmit = (e) => {
+  e.preventDefault();
+  if (state.busy) return;
+  const t = ta.value; ta.value = ""; autosize(); updateSend(); send(t);
+};
+
+// Technical details toggle (for HR admins / developers)
+function setTech(on) { document.body.classList.toggle("show-tech", on); $("techBtn").setAttribute("aria-pressed", String(on)); store.set("hr.tech", on ? "1" : "0"); }
+$("techBtn").onclick = () => setTech(!document.body.classList.contains("show-tech"));
+setTech(store.get("hr.tech") === "1");
+
+// ---------- tickets ----------
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: headers(!!opts.body) });
+  let body = {}; try { body = await r.json(); } catch { /* ignore */ }
+  if (!r.ok) throw new Error(body.detail || `Request failed (${r.status})`);
+  return body;
+}
+
+async function refreshMineCount() {
+  const el = $("mineCount");
+  try {
+    const d = await api("/tickets?scope=mine");
+    const open = (d.tickets || []).filter((t) => t.status === "open" || t.status === "in_progress").length;
+    el.textContent = open; el.hidden = !open;
+  } catch { el.hidden = true; }
+}
+
+function badge(status) { return `<span class="badge b-${esc(status)}">${esc(label(status))}</span>`; }
+
+async function renderTicketList() {
+  const root = $("ticketsRoot");
+  const scope = state.ticketScope;
+  const statuses = [["", "All"], ["open", "Open"], ["in_progress", "In progress"], ["resolved", "Resolved"], ["closed", "Closed"]];
+  root.innerHTML = `
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Filter by status">${statuses.map(([v, l]) =>
+        `<button type="button" data-st="${v}" aria-pressed="${state.ticketStatus === v}">${l}</button>`).join("")}</div>
+      ${scope === "mine" ? `<button class="btn primary" id="newTicket" type="button">New request</button>` : ""}
+    </div>
+    <div class="card" id="tcard"><div class="empty">Loading…</div></div>`;
+  for (const b of root.querySelectorAll(".seg button")) b.onclick = () => { state.ticketStatus = b.dataset.st; renderTicketList(); };
+  if ($("newTicket")) $("newTicket").onclick = renderNewTicket;
+  const card = $("tcard");
+  try {
+    const q = new URLSearchParams({ scope }); if (state.ticketStatus) q.set("status", state.ticketStatus);
+    const d = await api("/tickets?" + q);
+    if (scope !== state.ticketScope) return;
+    const list = d.tickets || [];
+    if (!list.length) {
+      card.innerHTML = scope === "mine"
+        ? `<div class="empty"><b>No requests yet</b>When you need help from HR, raise a request and track it here.</div>`
+        : `<div class="empty"><b>Nothing here</b>No requests match this filter.</div>`;
+      return;
+    }
+    card.innerHTML = `<div class="tlist"></div>`;
+    for (const t of list) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "titem";
+      b.innerHTML = `<span class="tid">${esc(t.ticket_id)}</span><span class="subj">${esc(t.subject)}</span>${badge(t.status)}
+        <span class="tmeta">${esc(CATEGORIES[t.category] || label(t.category))} · <span class="p-${esc(t.priority)}">${esc(label(t.priority))} priority</span>
+        ${scope !== "mine" ? " · from " + esc(nameOf(t.raised_by)) : ""} · updated ${esc(fmtDate(t.updated_at))}</span>`;
+      b.onclick = () => renderTicket(t.ticket_id);
+      card.firstChild.appendChild(b);
+    }
+    if (d.truncated) card.insertAdjacentHTML("beforeend", `<div class="empty" style="padding:12px">Showing the most recent requests only.</div>`);
+  } catch (e) {
+    card.innerHTML = `<div class="empty"><b>Couldn't load requests</b>${esc(e.message)}</div>`;
+  }
+}
+
+function renderNewTicket() {
+  const root = $("ticketsRoot");
+  root.innerHTML = `
+    <button class="back" type="button" id="back">← Back to my requests</button>
+    <div class="card">
+      <form class="form" id="tform">
+        <div class="full"><h3 style="margin:0 0 2px;font-size:18px">Raise a request with HR</h3>
+          <div style="font-size:13px;color:var(--muted)">Only you and the HR team can see this request.</div></div>
+        <label class="field full">Subject<input name="subject" maxlength="200" required placeholder="e.g. Salary slip for October is missing"></label>
+        <label class="field">Category<select name="category">${Object.entries(CATEGORIES).map(([k, v]) => `<option value="${k}"${k === "other" ? " selected" : ""}>${v}</option>`).join("")}</select></label>
+        <label class="field">Priority<select name="priority">${PRIORITIES.map((p) => `<option value="${p}"${p === "normal" ? " selected" : ""}>${label(p)[0].toUpperCase() + label(p).slice(1)}</option>`).join("")}</select></label>
+        <label class="field full">Description<textarea name="description" required maxlength="4000" placeholder="Tell HR what you need and include any dates or details that help."></textarea></label>
+        <div class="full" id="tformMsg"></div>
+        <div class="form-actions"><button class="btn" type="button" id="cancelNew">Cancel</button><button class="btn primary" type="submit">Submit request</button></div>
+      </form>
+    </div>`;
+  $("back").onclick = $("cancelNew").onclick = renderTicketList;
+  $("tform").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target), btn = e.target.querySelector("[type=submit]");
+    btn.disabled = true;
+    try {
+      const d = await api("/tickets", { method: "POST", body: JSON.stringify(Object.fromEntries(f)) });
+      refreshMineCount();
+      const id = (d.ticket && d.ticket.ticket_id) || d.ticket_id;
+      if (id) renderTicket(id, "Your request was submitted. HR will follow up here."); else renderTicketList();
+    } catch (err) {
+      $("tformMsg").innerHTML = `<div class="msg-inline error">${esc(err.message)}</div>`; btn.disabled = false;
+    }
+  };
+  root.querySelector("[name=subject]").focus();
+}
+
+async function renderTicket(id, flash) {
+  const root = $("ticketsRoot");
+  root.innerHTML = `<button class="back" type="button" id="back">← Back</button><div class="card"><div class="empty">Loading…</div></div>`;
+  $("back").onclick = renderTicketList;
+  try {
+    const d = await api("/tickets/" + encodeURIComponent(id));
+    const t = d.ticket, events = d.events || [], allowed = d.allowed_statuses || [];
+    const card = root.querySelector(".card");
+    card.innerHTML = `<div class="detail">
+      ${flash ? `<div class="msg-inline success">${esc(flash)}</div>` : ""}
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px"><div style="font-size:12px;color:var(--muted)">${esc(t.ticket_id)}</div><h3>${esc(t.subject)}</h3></div>${badge(t.status)}</div>
+      <div class="kv"><span>Category <b>${esc(CATEGORIES[t.category] || label(t.category))}</b></span>
+        <span>Priority <b class="p-${esc(t.priority)}">${esc(label(t.priority))}</b></span>
+        <span>Raised by <b>${esc(nameOf(t.raised_by))}</b></span>
+        <span>Assigned to <b>${t.assignee_id ? esc(nameOf(t.assignee_id)) : "HR team"}</b></span>
+        <span>Opened <b>${esc(fmtDate(t.created_at))}</b></span></div>
+      ${t.description ? `<div class="desc">${esc(t.description)}</div>` : ""}
+      ${events.length ? `<div><div class="sources-label">Activity</div><div class="timeline">${events.map((e) => `
+        <div class="ev"><div class="when"><b style="color:var(--text)">${esc(nameOf(e.author_id))}</b> · ${esc(label(e.kind))} · ${esc(fmtDate(e.created_at))}</div>
+        ${e.body ? `<div class="body">${esc(e.body)}</div>` : ""}</div>`).join("")}</div></div>` : ""}
+      ${t.status !== "closed" ? `<form id="cform" style="display:flex;flex-direction:column;gap:8px">
+        <label class="field">Add a comment<textarea name="comment" required maxlength="4000" style="min-height:80px" placeholder="Add an update or reply to HR"></textarea></label>
+        <div id="cmsg"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          ${allowed.filter((s) => s !== t.status).map((s) => `<button class="btn" type="button" data-status="${esc(s)}">${s === "closed" ? "Close request" : s === "open" ? "Reopen" : "Mark " + esc(label(s))}</button>`).join("")}
+          <button class="btn primary" type="submit">Post comment</button></div></form>`
+        : `<div class="msg-inline" style="background:var(--surface-2)">This request is closed. ${allowed.includes("open") ? "" : "Raise a new request if you need more help."}</div>
+           ${allowed.includes("open") ? `<div><button class="btn" type="button" data-status="open">Reopen request</button></div>` : ""}`}
+    </div>`;
+    const cform = $("cform");
+    if (cform) cform.onsubmit = async (e) => {
+      e.preventDefault();
+      const comment = new FormData(cform).get("comment").trim(); if (!comment) return;
+      try { await api(`/tickets/${encodeURIComponent(id)}/comments`, { method: "POST", body: JSON.stringify({ comment }) }); renderTicket(id, "Comment added."); }
+      catch (err) { $("cmsg").innerHTML = `<div class="msg-inline error">${esc(err.message)}</div>`; }
+    };
+    for (const b of card.querySelectorAll("[data-status]")) b.onclick = async () => {
+      b.disabled = true;
+      const note = cform ? new FormData(cform).get("comment").trim() : "";
+      try {
+        await api(`/tickets/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status: b.dataset.status, note }) });
+        refreshMineCount(); renderTicket(id, "Status updated to " + label(b.dataset.status) + ".");
+      } catch (err) {
+        b.disabled = false;
+        const m = $("cmsg"); if (m) m.innerHTML = `<div class="msg-inline error">${esc(err.message)}</div>`; else alert(err.message);
+      }
+    };
+  } catch (e) {
+    root.querySelector(".card").innerHTML = `<div class="empty"><b>Couldn't open this request</b>${esc(e.message)}</div>`;
+  }
+}
+
+// ---------- health ----------
+async function health() {
+  const set = (cls, text) => { $("dot").className = "dot " + cls; $("statusText").textContent = text; };
+  try {
+    const r = await fetch("/health");
+    if (r.ok) set("ok", "Online"); else { set("", "Starting up…"); setTimeout(health, 2000); }
+  } catch { set("err", "Offline"); setTimeout(health, 4000); }
+}
+
+setupPeople();
 health();
+updateSend();
 </script>
 </body>
 </html>

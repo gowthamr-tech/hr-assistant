@@ -5,7 +5,7 @@ from datetime import date
 
 from app.tools.leave_tools import ToolResult
 
-SCOPE_HELP = ("I can help with Veltrix HR policies and holidays, with your leave: balances, "
+SCOPE_HELP = ("I can help with HR policies and holidays, with your leave: balances, "
               "leave requests, and applying for or cancelling leave, and with HR support tickets: "
               "raising one and following it up.")
 OFF_TOPIC = "Sorry, that's outside what I can help with. " + SCOPE_HELP
